@@ -1,6 +1,5 @@
 //
-// Copyright (C) 2004-2006 Maciej Sobczak, Stephen Hutton
-// MySQL backend copyright (C) 2006 Pawel Aleksander Fedorynski
+// Copyright (C) 2004-2006 Maciej Sobczak, Stephen Hutton, David Courtney
 // Distributed under the Boost Software License, Version 1.0.
 // (See accompanying file LICENSE_1_0.txt or copy at
 // http://www.boost.org/LICENSE_1_0.txt)
@@ -9,50 +8,50 @@
 #define SOCI_MYSQL_SOURCE
 #include "soci/mysql/soci-mysql.h"
 #include <cctype>
-#include <ciso646>
+#include <sstream>
+#include <cstring>
 
 using namespace soci;
 using namespace soci::details;
-using std::string;
 
 
-mysql_statement_backend::mysql_statement_backend(
-    mysql_session_backend &session)
-    : session_(session), result_(NULL),
-       rowsAffectedBulk_(-1LL), justDescribed_(false),
-       hasIntoElements_(false), hasVectorIntoElements_(false),
-       hasUseElements_(false), hasVectorUseElements_(false)
+mysql_statement_backend::mysql_statement_backend(mysql_session_backend& session)
+    : session_(session), hstmt_(0), numRowsFetched_(0), fetchVectorByRows_(false),
+    hasVectorUseElements_(false), boundByName_(false), boundByPos_(false),
+    rowsAffected_(-1LL), metadata_(NULL), hasUseElements_(false), hasIntoElements_(false)
 {
 }
 
 void mysql_statement_backend::alloc()
 {
-    // nothing to do here.
+
+    // Allocate environment handle
+    hstmt_ = mysql_stmt_init(session_.conn_);
+
+    if (hstmt_ == NULL)
+    {
+        throw soci_error(std::string("Error allocating statement - ") + mysql_error(session_.conn_));
+    }
 }
 
 void mysql_statement_backend::clean_up()
 {
-    // 'reset' the value for a
-    // potential new execution.
-    rowsAffectedBulk_ = -1;
+    rowsAffected_ = -1LL;
 
-    if (result_ != NULL)
-    {
-        mysql_free_result(result_);
-        result_ = NULL;
-    }
+    mysql_stmt_close(hstmt_);
 }
 
 void mysql_statement_backend::prepare(std::string const & query,
     statement_type /* eType */)
 {
-    queryChunks_.clear();
-    enum { eNormal, eInQuotes, eInName } state = eNormal;
+    // rewrite the query by transforming all named parameters into
+    // the Mysql ? s
+
+    enum { eNormal, eInQuotes, eInName, eInAccessDate } state = eNormal;
 
     std::string name;
-    queryChunks_.push_back("");
+    query_.reserve(query.length());
 
-    bool escaped = false;
     for (std::string::const_iterator it = query.begin(), end = query.end();
          it != end; ++it)
     {
@@ -61,40 +60,33 @@ void mysql_statement_backend::prepare(std::string const & query,
         case eNormal:
             if (*it == '\'')
             {
-                queryChunks_.back() += *it;
+                query_ += *it;
                 state = eInQuotes;
+            }
+            else if (*it == '#')
+            {
+                query_ += *it;
+                state = eInAccessDate;
             }
             else if (*it == ':')
             {
-                const std::string::const_iterator next_it = it + 1;
-                // Check whether this is an assignment (e.g. @x:=y)
-                // and treat it as a special case, not as a named binding.
-                if (next_it != end && *next_it == '=')
-                {
-                    queryChunks_.back() += ":=";
-                    ++it;
-                }
-                else
-                {
-                    state = eInName;
-                }
+                state = eInName;
             }
             else // regular character, stay in the same state
             {
-                queryChunks_.back() += *it;
+                query_ += *it;
             }
             break;
         case eInQuotes:
-            if (*it == '\'' && !escaped)
+            if (*it == '\'')
             {
-                queryChunks_.back() += *it;
+                query_ += *it;
                 state = eNormal;
             }
             else // regular quoted character
             {
-                queryChunks_.back() += *it;
+                query_ += *it;
             }
-            escaped = *it == '\\' && !escaped;
             break;
         case eInName:
             if (std::isalnum(*it) || *it == '_')
@@ -105,9 +97,20 @@ void mysql_statement_backend::prepare(std::string const & query,
             {
                 names_.push_back(name);
                 name.clear();
-                queryChunks_.push_back("");
-                queryChunks_.back() += *it;
+                query_ += "?";
+                query_ += *it;
                 state = eNormal;
+            }
+            break;
+        case eInAccessDate:
+            if (*it == '#')
+            {
+                query_ += *it;
+                state = eNormal;
+            }
+            else // regular quoted character
+            {
+                query_ += *it;
             }
             break;
         }
@@ -116,267 +119,186 @@ void mysql_statement_backend::prepare(std::string const & query,
     if (state == eInName)
     {
         names_.push_back(name);
+        query_ += "?";
     }
-/*
-  cerr << "Chunks: ";
-  for (std::vector<std::string>::iterator i = queryChunks_.begin();
-  i != queryChunks_.end(); ++i)
-  {
-  cerr << "\"" << *i << "\" ";
-  }
-  cerr << "\nNames: ";
-  for (std::vector<std::string>::iterator i = names_.begin();
-  i != names_.end(); ++i)
-  {
-  cerr << "\"" << *i << "\" ";
-  }
-  cerr << endl;
-*/
+
+    if (mysql_stmt_prepare(hstmt_, query_.c_str(), static_cast<unsigned long>(query_.size())) != 0)
+    {
+        std::ostringstream ss;
+        ss << "preparing query \"" << query_ << "\"";
+        throw soci_error(ss.str() + " -" + mysql_error(session_.conn_));
+    }
+
+
+    // reset any old into buffers, they will be added later if they're used
+    // with this query
+    intos_.clear();
 }
 
 statement_backend::exec_fetch_result
 mysql_statement_backend::execute(int number)
 {
-    if (justDescribed_ == false)
+    // Store the number of rows processed by this call.
+    unsigned long long rows_processed = 0;
+    if (hasVectorUseElements_)
     {
-        clean_up();
-
-        if (number > 1 && hasIntoElements_)
-        {
-             throw soci_error(
-                  "Bulk use with single into elements is not supported.");
-        }
-        // number - size of vectors (into/use)
-        // numberOfExecutions - number of loops to perform
-        int numberOfExecutions = 1;
-        if (number > 0)
-        {
-             numberOfExecutions = hasUseElements_ ? 1 : number;
-        }
-
-        std::string query;
-        if (not useByPosBuffers_.empty() or not useByNameBuffers_.empty())
-        {
-            if (not useByPosBuffers_.empty() and not useByNameBuffers_.empty())
-            {
-                throw soci_error(
-                    "Binding for use elements must be either by position "
-                    "or by name.");
-            }
-            long long rowsAffectedBulkTemp = -1;
-            for (int i = 0; i != numberOfExecutions; ++i)
-            {
-                std::vector<char *> paramValues;
-
-                if (not useByPosBuffers_.empty())
-                {
-                    // use elements bind by position
-                    // the map of use buffers can be traversed
-                    // in its natural order
-
-                    for (UseByPosBuffersMap::iterator
-                             it = useByPosBuffers_.begin(),
-                             end = useByPosBuffers_.end();
-                         it != end; ++it)
-                    {
-                        char **buffers = it->second;
-                        //cerr<<"i: "<<i<<", buffers[i]: "<<buffers[i]<<endl;
-                        paramValues.push_back(buffers[i]);
-                    }
-                }
-                else
-                {
-                    // use elements bind by name
-
-                    for (std::vector<std::string>::iterator
-                             it = names_.begin(), end = names_.end();
-                         it != end; ++it)
-                    {
-                        UseByNameBuffersMap::iterator b
-                            = useByNameBuffers_.find(*it);
-                        if (b == useByNameBuffers_.end())
-                        {
-                            std::string msg(
-                                "Missing use element for bind by name (");
-                            msg += *it;
-                            msg += ").";
-                            throw soci_error(msg);
-                        }
-                        char **buffers = b->second;
-                        paramValues.push_back(buffers[i]);
-                    }
-                }
-                //cerr << "queryChunks_.size(): "<<queryChunks_.size()<<endl;
-                //cerr << "paramValues.size(): "<<paramValues.size()<<endl;
-                if (queryChunks_.size() != paramValues.size()
-                    and queryChunks_.size() != paramValues.size() + 1)
-                {
-                    throw soci_error("Wrong number of parameters.");
-                }
-
-                std::vector<std::string>::const_iterator ci
-                    = queryChunks_.begin();
-                for (std::vector<char*>::const_iterator
-                         pi = paramValues.begin(), end = paramValues.end();
-                     pi != end; ++ci, ++pi)
-                {
-                    query += *ci;
-                    query += *pi;
-                }
-                if (ci != queryChunks_.end())
-                {
-                    query += *ci;
-                }
-                if (numberOfExecutions > 1)
-                {
-                    // bulk operation
-                    //std::cerr << "bulk operation:\n" << query << std::endl;
-                    if (0 != mysql_real_query(session_.conn_, query.c_str(),
-                            static_cast<unsigned long>(query.size())))
-                    {
-                        // preserve the number of rows affected so far.
-                        rowsAffectedBulk_ = rowsAffectedBulkTemp;
-                        throw mysql_soci_error(mysql_error(session_.conn_),
-                            mysql_errno(session_.conn_));
-                    }
-                    else
-                    {
-                        if(rowsAffectedBulkTemp == -1)
-                        {
-                            rowsAffectedBulkTemp = 0;
-                        }
-                        rowsAffectedBulkTemp += static_cast<long long>(mysql_affected_rows(session_.conn_));
-                    }
-                    if (mysql_field_count(session_.conn_) != 0)
-                    {
-                        throw soci_error("The query shouldn't have returned"
-                            " any data but it did.");
-                    }
-                    query.clear();
-                }
-            }
-            rowsAffectedBulk_ = rowsAffectedBulkTemp;
-            if (numberOfExecutions > 1)
-            {
-                // bulk
-                return ef_no_data;
-            }
-        }
-        else
-        {
-            query = queryChunks_.front();
-        }
-
-        //std::cerr << query << std::endl;
-        if (0 != mysql_real_query(session_.conn_, query.c_str(),
-                static_cast<unsigned long>(query.size())))
-        {
-            throw mysql_soci_error(mysql_error(session_.conn_),
-                mysql_errno(session_.conn_));
-        }
-        result_ = mysql_store_result(session_.conn_);
-        if (result_ == NULL and mysql_field_count(session_.conn_) != 0)
-        {
-            throw mysql_soci_error(mysql_error(session_.conn_),
-                mysql_errno(session_.conn_));
-        }
-        if (result_ != NULL)
-        {
-            // Cache the rows offsets to have random access to the rows later.
-            // [mysql_data_seek() is O(n) so we don't want to use it].
-            int numrows = static_cast<int>(mysql_num_rows(result_));
-            resultRowOffsets_.resize(numrows);
-            for (int i = 0; i < numrows; i++)
-            {
-                resultRowOffsets_[i] = mysql_row_tell(result_);
-                mysql_fetch_row(result_);
-            }
-        }
+        mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed);
     }
-    else
+    else if (hasUseElements_)
     {
-        justDescribed_ = false;
+        rows_processed = 1;
+        mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed);
     }
 
-    if (result_ != NULL)
-    {
-        currentRow_ = 0;
-        rowsToConsume_ = 0;
+    std::unique_ptr<MYSQL_BIND[]> bindArray;
 
-        numberOfRows_ = static_cast<int>(mysql_num_rows(result_));
-        if (numberOfRows_ == 0)
-        {
-            return ef_no_data;
-        }
-        else
-        {
-            if (number > 0)
-            {
-                // prepare for the subsequent data consumption
-                return fetch(number);
-            }
-            else
-            {
-                // execute(0) was meant to only perform the query
-                return ef_success;
-            }
-        }
-    }
-    else
+    if (hasUseElements_)
     {
-        // it was not a SELECT
+        bindArray = std::make_unique<MYSQL_BIND[]>(bindingInfoList_.size());
+
+        for (size_t bindingI = 0; bindingI < bindingInfoList_.size(); bindingI++)
+        {
+            MYSQL_BIND* bindInfo = bindingInfoList_.at(bindingI);
+            memcpy(&(bindArray.get()[bindingI]), bindInfo, sizeof(MYSQL_BIND));
+        }
+
+
+
+        mysql_stmt_bind_param(hstmt_, bindArray.get());
+
+
+    }
+
+    // if we are called twice for the same statement we need to close the open
+    // cursor or an "invalid cursor state" error will occur on execute
+    //SQLCloseCursor(hstmt_);
+
+    if (mysql_stmt_execute(hstmt_) != 0)
+    {
+
+        throw soci_error(std::string("Statement execute failed - ") + mysql_error(session_.conn_));
+    }
+    else if (hasVectorUseElements_)
+    {
+        // We already have the number of rows, no need to do anything.
+        rowsAffected_ = rows_processed;
+    }
+    else // We need to retrieve the number of rows affected explicitly.
+    {
+        unsigned long long res = mysql_stmt_affected_rows(hstmt_);
+        if (res == -1)
+        {
+            throw soci_error(std::string("Error getting number of affected rows - ") + mysql_error(session_.conn_));
+        }
+
+        rowsAffected_ = res;
+    }
+
+    unsigned int colCount = mysql_stmt_field_count(hstmt_);
+
+    if (number > 0 && colCount > 0)
+    {
+        return fetch(number);
+    }
+
+    return ef_success;
+}
+
+statement_backend::exec_fetch_result
+mysql_statement_backend::do_fetch(int beginRow, int endRow)
+{
+    int rc = mysql_stmt_fetch(hstmt_);
+
+    if (MYSQL_NO_DATA == rc)
+    {
         return ef_no_data;
     }
+
+    if (rc == 1)
+    {
+        throw soci_error(std::string("Error fetching data - ") + mysql_error(session_.conn_));
+    }
+
+    for (std::size_t j = 0; j != intos_.size(); ++j)
+    {
+        intos_[j]->do_post_fetch_rows(beginRow, endRow);
+    }
+
+    return ef_success;
 }
 
 statement_backend::exec_fetch_result
 mysql_statement_backend::fetch(int number)
 {
-    // Note: This function does not actually fetch anything from anywhere
-    // - the data was already retrieved from the server in the execute()
-    // function, and the actual consumption of this data will take place
-    // in the postFetch functions, called for each into element.
-    // Here, we only prepare for this to happen (to emulate "the Oracle way").
+    numRowsFetched_ = 0;
 
-    // forward the "cursor" from the last fetch
-    currentRow_ += rowsToConsume_;
-
-    if (currentRow_ >= numberOfRows_)
+    for (std::size_t i = 0; i != intos_.size(); ++i)
     {
-        // all rows were already consumed
-        return ef_no_data;
+        intos_[i]->resize(number);
     }
-    else
-    {
-        if (currentRow_ + number > numberOfRows_)
-        {
-            rowsToConsume_ = numberOfRows_ - currentRow_;
 
-            // this simulates the behaviour of Oracle
-            // - when EOF is hit, we return ef_no_data even when there are
-            // actually some rows fetched
-            return ef_no_data;
-        }
-        else
-        {
-            rowsToConsume_ = number;
-            return ef_success;
-        }
+    // Is there a MySQL equivalent of this??
+    // SQLSetStmtAttr(hstmt_, SQL_ATTR_ROW_BIND_TYPE, SQL_BIND_BY_COLUMN, 0);
+
+    statement_backend::exec_fetch_result res SOCI_DUMMY_INIT(ef_success);
+
+    // Usually we try to fetch the entire vector at once, but if some into
+    // string columns are bigger than 8KB (ODBC_MAX_COL_SIZE) then we use
+    // 100MB buffer for that columns. So in this case we downgrade to using
+    // scalar fetches to hold the buffer only for a single row and not
+    // rows_count * 100MB.
+    // See mysql_vector_into_type_backend::define_by_pos().
+    if (!fetchVectorByRows_)
+    {
+        // OK, I don't know what to do here yet
+        /*
+        SQLULEN row_array_size = static_cast<SQLULEN>(number);
+        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)row_array_size, 0);
+
+        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &numRowsFetched_, 0);
+        */
+        res = do_fetch(0, number);
     }
+    else // Use multiple calls to SQLFetch().
+    {
+        // OK, I don't know what to do here yet
+        throw soci_error("Not implemented");
+        /*
+        SQLULEN curNumRowsFetched = 0;
+        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &curNumRowsFetched, 0);
+
+        for (int row = 0; row < number; ++row)
+        {
+            // Unfortunately we need to redefine all vector intos which
+            // were bound to the first element of the vector initially.
+            //
+            // Note that we need to do it even for row == 0 as this might not
+            // be the first call to fetch() and so the current bindings might
+            // not be the same as initial ones.
+            for (std::size_t j = 0; j != intos_.size(); ++j)
+            {
+                intos_[j]->rebind_row(row);
+            }
+
+            res = do_fetch(row, row + 1);
+            if (res != ef_success)
+                break;
+
+            numRowsFetched_ += curNumRowsFetched;
+        }*/
+    }
+
+    return res;
 }
 
 long long mysql_statement_backend::get_affected_rows()
 {
-    if (rowsAffectedBulk_ >= 0)
-    {
-        return rowsAffectedBulk_;
-    }
-    return static_cast<long long>(mysql_affected_rows(session_.conn_));
+    return rowsAffected_;
 }
 
 int mysql_statement_backend::get_number_of_rows()
 {
-    return numberOfRows_ - currentRow_;
+    return static_cast<int>(numRowsFetched_);
 }
 
 std::string mysql_statement_backend::get_parameter_name(int index) const
@@ -387,83 +309,94 @@ std::string mysql_statement_backend::get_parameter_name(int index) const
 std::string mysql_statement_backend::rewrite_for_procedure_call(
     std::string const &query)
 {
-    std::string newQuery("select ");
-    newQuery += query;
-    return newQuery;
+    return query;
 }
 
 int mysql_statement_backend::prepare_for_describe()
 {
-    execute(1);
-    justDescribed_ = true;
+    // For efficiency, we get all the fields now, and then return them from the cached
+    // list in describe_column below
 
-    int columns = mysql_field_count(session_.conn_);
-    return columns;
+    metadata_ = mysql_stmt_result_metadata(hstmt_);
+
+    return static_cast<int>(mysql_stmt_field_count(hstmt_));
 }
 
-void mysql_statement_backend::describe_column(int colNum,
-    data_type & type, std::string & columnName)
+void mysql_statement_backend::describe_column(int colNum, data_type & type,
+                                          std::string & columnName)
 {
-    int pos = colNum - 1;
-    MYSQL_FIELD *field = mysql_fetch_field_direct(result_, pos);
+    if (metadata_ == NULL)
+    {
+        throw soci_error("Internal error - prepare_for_describe not called before describe_column");
+    }
+
+    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum));
+
+    if (field == NULL)
+    {
+        std::ostringstream ss;
+        ss << "getting description of column at position " << colNum;
+        throw soci_error(ss.str());
+    }
+
+    columnName.assign(field->name, field->name_length);
+
+
     switch (field->type)
     {
-    case FIELD_TYPE_CHAR:       //MYSQL_TYPE_TINY:
-    case FIELD_TYPE_SHORT:      //MYSQL_TYPE_SHORT:
-    case FIELD_TYPE_INT24:      //MYSQL_TYPE_INT24:
-        type = dt_integer;
-        break;
-    case FIELD_TYPE_LONG:       //MYSQL_TYPE_LONG:
-        type = field->flags & UNSIGNED_FLAG ? dt_long_long
-                                            : dt_integer;
-        break;
-    case FIELD_TYPE_LONGLONG:   //MYSQL_TYPE_LONGLONG:
-        type = field->flags & UNSIGNED_FLAG ? dt_unsigned_long_long :
-                                              dt_long_long;
-        break;
-    case FIELD_TYPE_FLOAT:      //MYSQL_TYPE_FLOAT:
-    case FIELD_TYPE_DOUBLE:     //MYSQL_TYPE_DOUBLE:
-    case FIELD_TYPE_DECIMAL:    //MYSQL_TYPE_DECIMAL:
-    // Prior to MySQL v. 5.x there was no column type corresponding
-    // to MYSQL_TYPE_NEWDECIMAL. However, MySQL server 5.x happily
-    // sends field type number 246, no matter which version of libraries
-    // the client is using.
-    case 246:                   //MYSQL_TYPE_NEWDECIMAL:
-        type = dt_double;
-        break;
-    case FIELD_TYPE_TIMESTAMP:  //MYSQL_TYPE_TIMESTAMP:
-    case FIELD_TYPE_DATE:       //MYSQL_TYPE_DATE:
-    case FIELD_TYPE_TIME:       //MYSQL_TYPE_TIME:
-    case FIELD_TYPE_DATETIME:   //MYSQL_TYPE_DATETIME:
-    case FIELD_TYPE_YEAR:       //MYSQL_TYPE_YEAR:
-    case FIELD_TYPE_NEWDATE:    //MYSQL_TYPE_NEWDATE:
+    case MYSQL_TYPE_DATE:
+    case MYSQL_TYPE_TIME:
+    case MYSQL_TYPE_TIMESTAMP:
         type = dt_date;
         break;
-//  case MYSQL_TYPE_VARCHAR:
-    case FIELD_TYPE_VAR_STRING: //MYSQL_TYPE_VAR_STRING:
-    case FIELD_TYPE_STRING:     //MYSQL_TYPE_STRING:
-    case FIELD_TYPE_BLOB:       // TEXT OR BLOB
-    case FIELD_TYPE_TINY_BLOB:
-    case FIELD_TYPE_MEDIUM_BLOB:
-    case FIELD_TYPE_LONG_BLOB:
+    case MYSQL_TYPE_DOUBLE:
+    case MYSQL_TYPE_DECIMAL:
+    case MYSQL_TYPE_FLOAT:
+        type = dt_double;
+        break;
+    case MYSQL_TYPE_TINY:
+    case MYSQL_TYPE_SHORT:
+    case MYSQL_TYPE_LONG:
+        type = dt_integer;
+        break;
+    case MYSQL_TYPE_LONGLONG:
+        type = dt_long_long;
+        break;
+    case MYSQL_TYPE_STRING:
+    case MYSQL_TYPE_VARCHAR:
+    case MYSQL_TYPE_VAR_STRING:
+    default:
         type = dt_string;
         break;
-    default:
-        //std::cerr << "field->type: " << field->type << std::endl;
-        throw soci_error("Unknown data type.");
     }
-    columnName = field->name;
 }
 
-mysql_standard_into_type_backend *
-mysql_statement_backend::make_into_type_backend()
+std::size_t mysql_statement_backend::column_size(int colNum)
 {
-    hasIntoElements_ = true;
+
+    if (metadata_ == NULL)
+    {
+        throw soci_error("Internal error - prepare_for_describe not called before column_size");
+    }
+
+    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum));
+
+    if (field == NULL)
+    {
+        std::ostringstream ss;
+        ss << "getting description of column at position " << colNum;
+        throw soci_error(ss.str());
+    }
+
+    return field->length;
+}
+
+mysql_standard_into_type_backend * mysql_statement_backend::make_into_type_backend()
+{
     return new mysql_standard_into_type_backend(*this);
 }
 
-mysql_standard_use_type_backend *
-mysql_statement_backend::make_use_type_backend()
+mysql_standard_use_type_backend * mysql_statement_backend::make_use_type_backend()
 {
     hasUseElements_ = true;
     return new mysql_standard_use_type_backend(*this);
@@ -472,12 +405,10 @@ mysql_statement_backend::make_use_type_backend()
 mysql_vector_into_type_backend *
 mysql_statement_backend::make_vector_into_type_backend()
 {
-    hasVectorIntoElements_ = true;
     return new mysql_vector_into_type_backend(*this);
 }
 
-mysql_vector_use_type_backend *
-mysql_statement_backend::make_vector_use_type_backend()
+mysql_vector_use_type_backend * mysql_statement_backend::make_vector_use_type_backend()
 {
     hasVectorUseElements_ = true;
     return new mysql_vector_use_type_backend(*this);

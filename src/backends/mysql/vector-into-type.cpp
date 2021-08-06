@@ -1,3 +1,11 @@
+////////////////////////////////////////////////////
+////////////////////////////////////////////////////
+//////////// THIS IS THE OLD ONE!!!!!!!!11111
+////////////////////////////////////////////////////
+////////////////////////////////////////////////////
+////////////////////////////////////////////////////
+
+
 //
 // Copyright (C) 2004-2006 Maciej Sobczak, Stephen Hutton
 // MySQL backend copyright (C) 2006 Pawel Aleksander Fedorynski
@@ -224,4 +232,9 @@ std::size_t mysql_vector_into_type_backend::size()
 void mysql_vector_into_type_backend::clean_up()
 {
     // nothing to do here
+}
+
+void mysql_vector_into_type_backend::do_post_fetch_rows(std::size_t beginRow, std::size_t endRow)
+{
+    throw soci_error("NOT IMPLEMENTD");
 }

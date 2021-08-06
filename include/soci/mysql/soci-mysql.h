@@ -53,7 +53,7 @@ struct mysql_statement_backend;
 struct mysql_standard_into_type_backend : details::standard_into_type_backend
 {
     mysql_standard_into_type_backend(mysql_statement_backend &st)
-        : statement_(st) {}
+        : statement_(st), isNull_(false), isError_(false){}
 
     void define_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;
@@ -66,9 +66,15 @@ struct mysql_standard_into_type_backend : details::standard_into_type_backend
 
     mysql_statement_backend &statement_;
 
+    char* buf_;        // generic buffer
     void *data_;
     details::exchange_type type_;
     int position_;
+    enum_field_types mysqlType_;
+    unsigned long valueLen_;
+    MYSQL_BIND bindingInfo_;
+    my_bool isNull_;
+    my_bool isError_;
 };
 
 struct mysql_vector_into_type_backend : details::vector_into_type_backend
@@ -87,6 +93,13 @@ struct mysql_vector_into_type_backend : details::vector_into_type_backend
 
     void clean_up() SOCI_OVERRIDE;
 
+    // Normally data retrieved from the database is handled in post_fetch(),
+    // however we may need to call mysql_fetch    // Normally data retrieved from the database is handled in post_fetch(),
+    // however we may need to call SQLFetch() multiple times, so we call this
+    // function instead after each call to it to retrieve the given range of
+    // rows.
+    void do_post_fetch_rows(std::size_t beginRow, std::size_t endRow); 
+
     mysql_statement_backend &statement_;
 
     void *data_;
@@ -97,12 +110,14 @@ struct mysql_vector_into_type_backend : details::vector_into_type_backend
 struct mysql_standard_use_type_backend : details::standard_use_type_backend
 {
     mysql_standard_use_type_backend(mysql_statement_backend &st)
-        : statement_(st), position_(0), buf_(NULL) {}
+        : statement_(st), position_(0), buf_(NULL), size_(0), isnull_(false), indHolder_(STMT_INDICATOR_NONE){}
 
     void bind_by_pos(int &position,
         void *data, details::exchange_type type, bool readOnly) SOCI_OVERRIDE;
     void bind_by_name(std::string const &name,
         void *data, details::exchange_type type, bool readOnly) SOCI_OVERRIDE;
+
+    void* prepare_for_bind(unsigned long& size, enum_field_types& sqlType);
 
     void pre_use(indicator const *ind) SOCI_OVERRIDE;
     void post_use(bool gotData, indicator *ind) SOCI_OVERRIDE;
@@ -110,12 +125,23 @@ struct mysql_standard_use_type_backend : details::standard_use_type_backend
     void clean_up() SOCI_OVERRIDE;
 
     mysql_statement_backend &statement_;
+    MYSQL_BIND bindingInfo_;
 
     void *data_;
     details::exchange_type type_;
     int position_;
     std::string name_;
     char *buf_;
+    unsigned long size_;
+    bool isnull_;
+    enum_indicator_type indHolder_;
+
+private:
+    // Copy string data to buf_ and set size, sqlType and cType to the values
+    // appropriate for strings.
+    void copy_from_string(std::string const& s,
+        unsigned long& size,
+        enum_field_types& sqlType);
 };
 
 struct mysql_vector_use_type_backend : details::vector_use_type_backend
@@ -166,13 +192,21 @@ struct mysql_statement_backend : details::statement_backend
     void describe_column(int colNum, data_type &dtype,
         std::string &columnName) SOCI_OVERRIDE;
 
+    // helper for defining into vector<string>
+    std::size_t column_size(int position);
     mysql_standard_into_type_backend * make_into_type_backend() SOCI_OVERRIDE;
     mysql_standard_use_type_backend * make_use_type_backend() SOCI_OVERRIDE;
     mysql_vector_into_type_backend * make_vector_into_type_backend() SOCI_OVERRIDE;
     mysql_vector_use_type_backend * make_vector_use_type_backend() SOCI_OVERRIDE;
 
-    mysql_session_backend &session_;
+    void mysql_statement_backend::addBindingInfo(MYSQL_BIND* bindingInfo)
+    {
+        bindingInfoList_.push_back(bindingInfo);
+    }
 
+
+    mysql_session_backend &session_;
+    MYSQL_STMT* hstmt_;
     MYSQL_RES *result_;
 
     // The query is split into chunks, separated by the named parameters;
@@ -200,6 +234,14 @@ struct mysql_statement_backend : details::statement_backend
     bool hasUseElements_;
     bool hasVectorUseElements_;
 
+    long long numRowsFetched_;
+    long long rowsAffected_;
+    bool fetchVectorByRows_;
+    bool boundByName_;
+    bool boundByPos_;
+    std::string query_;
+    MYSQL_RES* metadata_;
+
     // the following maps are used for finding data buffers according to
     // use elements specified by the user
 
@@ -208,6 +250,17 @@ struct mysql_statement_backend : details::statement_backend
 
     typedef std::map<std::string, char **> UseByNameBuffersMap;
     UseByNameBuffersMap useByNameBuffers_;
+
+
+    // This vector, containing non-owning non-null pointers, can be empty if
+    // we're not using any vector "intos".
+    std::vector<mysql_vector_into_type_backend*> intos_;
+
+    std::vector<MYSQL_BIND*> bindingInfoList_;
+
+private:
+    // fetch() helper wrapping mysql_stmt_fetch() call for the given range of rows.
+    exec_fetch_result do_fetch(int beginRow, int endRow);
 };
 
 struct mysql_rowid_backend : details::rowid_backend
