@@ -181,6 +181,7 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     // So use separate holder variables depending on whether we need to insert
     // null or not.
     static char indHolderNull = STMT_INDICATOR_NULL;
+    static my_bool myBoolTrue = true;
 
     memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
 
@@ -189,9 +190,12 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     bindingInfo_.buffer_type = sqlType;
     bindingInfo_.length = &size_;
 
-    bindingInfo_.is_null = 0;
+    if (*ind == i_null)
+    {
+        bindingInfo_.is_null = &myBoolTrue;
+    }    
 
-//    bindingInfo_.u.indicator = ind && *ind == i_null ? &indHolderNull : reinterpret_cast<char*>(&indHolder_);
+//    bindingInfo_.u.indicator = ind && *ind == i_null ? : reinterpret_cast<char*>(&indHolder_);
 
     statement_.addBindingInfo(&bindingInfo_);
 
