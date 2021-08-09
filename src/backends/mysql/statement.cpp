@@ -148,28 +148,43 @@ mysql_statement_backend::execute(int number)
         }
     }   
 
-    std::unique_ptr<MYSQL_BIND[]> bindArray;
+    std::unique_ptr<MYSQL_BIND[]> parameterBindArray;
 
-    if (bindingInfoList_.size() > 0)
+    if (parameterBindingList_.size() > 0)
     {
-        bindArray = std::make_unique<MYSQL_BIND[]>(bindingInfoList_.size());
+        parameterBindArray = std::make_unique<MYSQL_BIND[]>(parameterBindingList_.size());
 
-        for (size_t bindingI = 0; bindingI < bindingInfoList_.size(); bindingI++)
+        for (size_t bindingI = 0; bindingI < parameterBindingList_.size(); bindingI++)
         {
-            MYSQL_BIND* bindInfo = bindingInfoList_.at(bindingI);
-            memcpy(&(bindArray.get()[bindingI]), bindInfo, sizeof(MYSQL_BIND));
+            MYSQL_BIND* bindInfo = parameterBindingList_.at(bindingI);
+            memcpy(&(parameterBindArray.get()[bindingI]), bindInfo, sizeof(MYSQL_BIND));
         }
 
-
-
-        if (mysql_stmt_bind_param(hstmt_, bindArray.get()) != 0)
+        if (mysql_stmt_bind_param(hstmt_, parameterBindArray.get()) != 0)
         {
             throw soci_error("Parameter binding error");
         }
-        
-
-
     }
+
+    std::unique_ptr<MYSQL_BIND[]> resultBindArray;
+
+    if (resultBindingList_.size() > 0)
+    {
+        resultBindArray = std::make_unique<MYSQL_BIND[]>(resultBindingList_.size());
+
+        for (size_t bindingI = 0; bindingI < resultBindingList_.size(); bindingI++)
+        {
+            MYSQL_BIND* bindInfo = resultBindingList_.at(bindingI);
+            memcpy(&(resultBindArray.get()[bindingI]), bindInfo, sizeof(MYSQL_BIND));
+        }
+
+        if (mysql_stmt_bind_result(hstmt_, resultBindArray.get()) != 0)
+        {
+            throw soci_error("Parameter binding error");
+        }
+    }
+
+
 
     // if we are called twice for the same statement we need to close the open
     // cursor or an "invalid cursor state" error will occur on execute
@@ -200,6 +215,11 @@ mysql_statement_backend::execute(int number)
 
     if (number > 0 && colCount > 0)
     {
+        if (mysql_stmt_store_result(hstmt_) != 0)
+        {
+            throw soci_error(std::string("Error buffering results - ") + mysql_stmt_error(hstmt_));
+        }
+
         return fetch(number);
     }
 

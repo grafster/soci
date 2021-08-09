@@ -195,7 +195,7 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
 
 //    bindingInfo_.u.indicator = ind && *ind == i_null ? : reinterpret_cast<char*>(&indHolder_);
 
-    statement_.addBindingInfo(&bindingInfo_);
+    statement_.addParameterBinding(&bindingInfo_);
 
    
 }

@@ -199,9 +199,14 @@ struct mysql_statement_backend : details::statement_backend
     mysql_vector_into_type_backend * make_vector_into_type_backend() SOCI_OVERRIDE;
     mysql_vector_use_type_backend * make_vector_use_type_backend() SOCI_OVERRIDE;
 
-    void mysql_statement_backend::addBindingInfo(MYSQL_BIND* bindingInfo)
+    void mysql_statement_backend::addParameterBinding(MYSQL_BIND* bindingInfo)
     {
-        bindingInfoList_.push_back(bindingInfo);
+        parameterBindingList_.push_back(bindingInfo);
+    }
+
+    void mysql_statement_backend::addResultBinding(MYSQL_BIND* bindingInfo)
+    {
+        resultBindingList_.push_back(bindingInfo);
     }
 
 
@@ -256,7 +261,8 @@ struct mysql_statement_backend : details::statement_backend
     // we're not using any vector "intos".
     std::vector<mysql_vector_into_type_backend*> intos_;
 
-    std::vector<MYSQL_BIND*> bindingInfoList_;
+    std::vector<MYSQL_BIND*> parameterBindingList_;
+    std::vector<MYSQL_BIND*> resultBindingList_;
 
 private:
     // fetch() helper wrapping mysql_stmt_fetch() call for the given range of rows.

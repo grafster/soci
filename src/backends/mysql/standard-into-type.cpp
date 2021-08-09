@@ -82,7 +82,7 @@ void mysql_standard_into_type_backend::define_by_pos(
     bindingInfo_.is_null = &isNull_;
     bindingInfo_.error = &isError_;
 
-    statement_.addBindingInfo(&bindingInfo_);
+    statement_.addResultBinding(&bindingInfo_);
 }
 
 void mysql_standard_into_type_backend::pre_fetch()
