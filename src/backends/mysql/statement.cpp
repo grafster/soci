@@ -30,7 +30,7 @@ void mysql_statement_backend::alloc()
 
     if (hstmt_ == NULL)
     {
-        throw soci_error(std::string("Error allocating statement - ") + mysql_error(session_.conn_));
+        throw soci_error(std::string("Error allocating statement - ") + mysql_stmt_error(hstmt_));
     }
 }
 
@@ -126,7 +126,7 @@ void mysql_statement_backend::prepare(std::string const & query,
     {
         std::ostringstream ss;
         ss << "preparing query \"" << query_ << "\"";
-        throw soci_error(ss.str() + " -" + mysql_error(session_.conn_));
+        throw soci_error(ss.str() + " -" + mysql_stmt_error(hstmt_));
     }
 
 
@@ -142,13 +142,11 @@ mysql_statement_backend::execute(int number)
     unsigned long long rows_processed = 0;
     if (hasVectorUseElements_)
     {
-        mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed);
-    }
-    else if (hasUseElements_)
-    {
-        rows_processed = 1;
-        mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed);
-    }
+        if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed) != 0)
+        {
+            throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
+        }
+    }   
 
     std::unique_ptr<MYSQL_BIND[]> bindArray;
 
@@ -164,7 +162,11 @@ mysql_statement_backend::execute(int number)
 
 
 
-        mysql_stmt_bind_param(hstmt_, bindArray.get());
+        if (mysql_stmt_bind_param(hstmt_, bindArray.get()) != 0)
+        {
+            throw soci_error("Parameter binding error");
+        }
+        
 
 
     }
@@ -176,7 +178,7 @@ mysql_statement_backend::execute(int number)
     if (mysql_stmt_execute(hstmt_) != 0)
     {
 
-        throw soci_error(std::string("Statement execute failed - ") + mysql_error(session_.conn_));
+        throw soci_error(std::string("Statement execute failed - ") + mysql_stmt_error(hstmt_));
     }
     else if (hasVectorUseElements_)
     {
@@ -188,7 +190,7 @@ mysql_statement_backend::execute(int number)
         unsigned long long res = mysql_stmt_affected_rows(hstmt_);
         if (res == -1)
         {
-            throw soci_error(std::string("Error getting number of affected rows - ") + mysql_error(session_.conn_));
+            throw soci_error(std::string("Error getting number of affected rows - ") + mysql_stmt_error(hstmt_));
         }
 
         rowsAffected_ = res;

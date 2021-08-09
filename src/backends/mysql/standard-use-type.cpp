@@ -59,12 +59,16 @@ void* mysql_standard_use_type_backend::prepare_for_bind(
     {
         std::tm const& t = exchange_type_cast<x_stdtm>(data_);
 
-        sqlType = MYSQL_TYPE_TIMESTAMP;
+        sqlType = MYSQL_TYPE_DATE;
+        
         buf_ = new char[sizeof(MYSQL_TIME)];
-        size = sizeof(MYSQL_TIME);
+        memset(buf_, 0, sizeof(MYSQL_TIME));
+
+        // From example https://dev.mysql.com/doc/c-api/5.6/en/c-api-prepared-statement-date-handling.html
+        // length is zero
+        size = 0;
 
         MYSQL_TIME* ts = reinterpret_cast<MYSQL_TIME*>(buf_);
-
 
         ts->year = static_cast<unsigned int>(t.tm_year + 1900);
         ts->month = static_cast<unsigned int>(t.tm_mon + 1);
@@ -72,7 +76,6 @@ void* mysql_standard_use_type_backend::prepare_for_bind(
         ts->hour = static_cast<unsigned int>(t.tm_hour);
         ts->minute = static_cast<unsigned int>(t.tm_min);
         ts->second = static_cast<unsigned int>(t.tm_sec);
-
     }
     break;
 
@@ -181,11 +184,14 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
 
     memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
 
-    bindingInfo_.buffer = sqlData;
-    bindingInfo_.buffer_length = bufLen;
+    bindingInfo_.buffer = (char*)sqlData;
+    bindingInfo_.buffer_length = size_;
     bindingInfo_.buffer_type = sqlType;
     bindingInfo_.length = &size_;
-    bindingInfo_.u.indicator = ind && *ind == i_null ? &indHolderNull : reinterpret_cast<char*>(&indHolder_);
+
+    bindingInfo_.is_null = 0;
+
+//    bindingInfo_.u.indicator = ind && *ind == i_null ? &indHolderNull : reinterpret_cast<char*>(&indHolder_);
 
     statement_.addBindingInfo(&bindingInfo_);
 
@@ -224,3 +230,4 @@ void mysql_standard_use_type_backend::clean_up()
         buf_ = NULL;
     }
 }
+
