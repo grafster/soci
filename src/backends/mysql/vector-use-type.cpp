@@ -1,224 +1,340 @@
-////////////////////////////////////////////////////
-////////////////////////////////////////////////////
-//////////// THIS IS THE OLD ONE!!!!!!!!11111
-////////////////////////////////////////////////////
-////////////////////////////////////////////////////
-////////////////////////////////////////////////////
-
 //
-// Copyright (C) 2004-2006 Maciej Sobczak, Stephen Hutton
-// MySQL backend copyright (C) 2006 Pawel Aleksander Fedorynski
+// Copyright (C) 2004-2021 Maciej Sobczak, Stephen Hutton, David Courtney, Andrew Grafham
 // Distributed under the Boost Software License, Version 1.0.
 // (See accompanying file LICENSE_1_0.txt or copy at
 // http://www.boost.org/LICENSE_1_0.txt)
 //
 
 #define SOCI_MYSQL_SOURCE
-#include "soci/mysql/soci-mysql.h"
-#include "common.h"
 #include "soci/soci-platform.h"
-#include "soci-dtocstr.h"
-// std
-#include <ciso646>
-#include <cstddef>
+#include "soci/mysql/soci-mysql.h"
+#include "soci-compiler.h"
+#include "soci-static-assert.h"
+#include "soci-vector-helpers.h"
+#include <cctype>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <limits>
-#include <string>
-#include <vector>
+#include <sstream>
+
 
 using namespace soci;
 using namespace soci::details;
-using namespace soci::details::mysql;
 
-
-void mysql_vector_use_type_backend::bind_by_pos(int &position, void *data,
-    exchange_type type)
+void mysql_vector_use_type_backend::prepare_indicators(std::size_t size)
 {
+    if (size == 0)
+    {
+         throw soci_error("Vectors of size 0 are not allowed.");
+    }
+
+    indHolderVec_.resize(size);
+    statement_.vectorUseElementCount_ = size;
+}
+
+void* mysql_vector_use_type_backend::prepare_for_bind(unsigned long &size,
+    enum_field_types& sqlType)
+{
+    void* data = NULL;
+    switch (type_)
+    {    // simple cases
+    case x_short:
+        {
+            sqlType = MYSQL_TYPE_SHORT;
+            size = sizeof(short);
+            std::vector<short> *vp = static_cast<std::vector<short> *>(data_);
+            std::vector<short> &v(*vp);
+            prepare_indicators(v.size());
+            data = &v[0];
+        }
+        break;
+    case x_integer:
+        {
+            sqlType = MYSQL_TYPE_LONG;
+            size = sizeof(long);
+            std::vector<int> *vp = static_cast<std::vector<int> *>(data_);
+            std::vector<int> &v(*vp);
+            prepare_indicators(v.size());
+            data = &v[0];
+        }
+        break;
+    case x_long_long:
+        {
+            std::vector<long long> *vp =
+                static_cast<std::vector<long long> *>(data_);
+            std::vector<long long> &v(*vp);
+            std::size_t const vsize = v.size();
+            prepare_indicators(vsize);
+
+            sqlType = MYSQL_TYPE_LONGLONG;
+            size = sizeof(long long);
+            data = &v[0];
+        }
+        break;
+      case x_double:
+        {
+            sqlType = MYSQL_TYPE_DOUBLE;
+            size = sizeof(double);
+            std::vector<double> *vp = static_cast<std::vector<double> *>(data_);
+            std::vector<double> &v(*vp);
+            prepare_indicators(v.size());
+            data = &v[0];
+        }
+        break;
+
+    // cases that require adjustments and buffer management
+    case x_char:
+        {
+            std::vector<char> *vp
+                = static_cast<std::vector<char> *>(data_);
+            std::size_t const vsize = vp->size();
+
+            prepare_indicators(vsize);
+
+            size = sizeof(char) * 2;
+            buf_ = new char[size * vsize];
+
+            char *pos = buf_;
+
+            for (std::size_t i = 0; i != vsize; ++i)
+            {
+                *pos++ = (*vp)[i];
+                *pos++ = 0;
+            }
+
+            sqlType = MYSQL_TYPE_STRING;
+            data = buf_;
+        }
+        break;
+    case x_stdstring:
+    case x_xmltype:
+    case x_longstring:
+        {
+            std::size_t maxSize = 0;
+            std::size_t const vecSize = get_vector_size(type_, data_);
+            prepare_indicators(vecSize);
+            for (std::size_t i = 0; i != vecSize; ++i)
+            {
+                std::size_t sz = vector_string_value(type_, data_, i).length();
+
+                indHolderVec_[i] = sz;
+                maxSize = sz > maxSize ? sz : maxSize;
+            }
+
+            maxSize++; // For terminating nul.
+
+            buf_ = new char[maxSize * vecSize];
+            memset(buf_, 0, maxSize * vecSize);
+
+            char *pos = buf_;
+            for (std::size_t i = 0; i != vecSize; ++i)
+            {
+                std::string& value = vector_string_value(type_, data_, i);
+                memcpy(pos, value.c_str(), value.length());
+                pos += maxSize;
+            }
+
+            data = buf_;
+            size = static_cast<int>(maxSize);
+
+            sqlType = MYSQL_TYPE_STRING;
+        }
+        break;
+    case x_stdtm:
+        {
+            std::vector<std::tm> *vp
+                = static_cast<std::vector<std::tm> *>(data_);
+
+            prepare_indicators(vp->size());
+
+            buf_ = new char[sizeof(MYSQL_TIME) * vp->size()];
+
+            sqlType = MYSQL_TYPE_TIMESTAMP;
+            data = buf_;
+            size = sizeof(MYSQL_TIME);
+        }
+        break;
+
+    // not supported
+    default:
+        throw soci_error("Use vector element used with non-supported type.");
+    }
+
+    colSize_ = size;
+
+    return data;
+}
+
+void mysql_vector_use_type_backend::bind_by_pos(int &position,
+        void *data, exchange_type type)
+{
+    if (statement_.boundByName_)
+    {
+        throw soci_error(
+         "Binding for use elements must be either by position or by name.");
+    }
+
+    position_ = position++;
     data_ = data;
     type_ = type;
-    position_ = position++;
+
+    statement_.boundByPos_ = true;
 }
 
 void mysql_vector_use_type_backend::bind_by_name(
     std::string const &name, void *data, exchange_type type)
 {
+    if (statement_.boundByPos_)
+    {
+        throw soci_error(
+         "Binding for use elements must be either by position or by name.");
+    }
+
+    int position = -1;
+    int count = 1;
+
+    for (std::vector<std::string>::iterator it = statement_.names_.begin();
+         it != statement_.names_.end(); ++it)
+    {
+        if (*it == name)
+        {
+            position = count;
+            break;
+        }
+        count++;
+    }
+
+    if (position == -1)
+    {
+        std::ostringstream ss;
+        ss << "Unable to find name '" << name << "' to bind to";
+        throw soci_error(ss.str());
+    }
+
+    position_ = position;
     data_ = data;
     type_ = type;
-    name_ = name;
+
+    statement_.boundByName_ = true;
 }
 
 void mysql_vector_use_type_backend::pre_use(indicator const *ind)
 {
-    std::size_t const vsize = size();
-    for (size_t i = 0; i != vsize; ++i)
+    enum_field_types sqlType;
+    unsigned long size(0);
+
+    // Note that data_ is a pointer to C++ data while data returned by
+    // prepare_for_bind() is the data to be used by ODBC and doesn't always
+    // have the same format.
+    void* const data = prepare_for_bind(size, sqlType);
+
+    // first deal with data
+    int non_null_indicator = 0;
+    switch (type_)
     {
-        char *buf;
+        case x_short:
+        case x_integer:
+        case x_double:
+            // Length of the parameter value is ignored for these types.
+            break;
 
-        // the data in vector can be either i_ok or i_null
-        if (ind != NULL && ind[i] == i_null)
-        {
-            buf = new char[5];
-            std::strcpy(buf, "NULL");
-        }
-        else
-        {
-            // allocate and fill the buffer with text-formatted client data
-            switch (type_)
+        case x_char:
+        case x_stdstring:
+        case x_xmltype:
+        case x_longstring:
+            non_null_indicator = STMT_INDICATOR_NTS;
+            break;
+
+        case x_stdtm:
             {
-            case x_char:
+                std::vector<std::tm> *vp
+                     = static_cast<std::vector<std::tm> *>(data_);
+
+                std::vector<std::tm> &v(*vp);
+
+                char *pos = buf_;
+                std::size_t const vsize = v.size();
+                for (std::size_t i = 0; i != vsize; ++i)
                 {
-                    std::vector<char> *pv
-                        = static_cast<std::vector<char> *>(data_);
-                    std::vector<char> &v = *pv;
+                    std::tm t = v[i];
 
-                    char tmp[] = { v[i], '\0' };
-                    buf = quote(statement_.session_.conn_, tmp, 1);
+                    MYSQL_TIME * ts = reinterpret_cast<MYSQL_TIME*>(pos);
+
+                    ts->year = t.tm_year + 1900;
+                    ts->month = t.tm_mon + 1;
+                    ts->day = t.tm_mday;
+                    ts->hour = t.tm_hour;
+                    ts->minute = t.tm_min;
+                    ts->second = t.tm_sec;
+                    pos += sizeof(MYSQL_TIME);
                 }
-                break;
-            case x_stdstring:
-                {
-                    std::vector<std::string> *pv
-                        = static_cast<std::vector<std::string> *>(data_);
-                    std::vector<std::string> &v = *pv;
-
-                    buf = quote(statement_.session_.conn_,
-                        v[i].c_str(), v[i].size());
-                }
-                break;
-            case x_short:
-                {
-                    std::vector<short> *pv
-                        = static_cast<std::vector<short> *>(data_);
-                    std::vector<short> &v = *pv;
-
-                    std::size_t const bufSize
-                        = std::numeric_limits<short>::digits10 + 3;
-                    buf = new char[bufSize];
-                    snprintf(buf, bufSize, "%d", static_cast<int>(v[i]));
-                }
-                break;
-            case x_integer:
-                {
-                    std::vector<int> *pv
-                        = static_cast<std::vector<int> *>(data_);
-                    std::vector<int> &v = *pv;
-
-                    std::size_t const bufSize
-                        = std::numeric_limits<int>::digits10 + 3;
-                    buf = new char[bufSize];
-                    snprintf(buf, bufSize, "%d", v[i]);
-                }
-                break;
-            case x_long_long:
-                {
-                    std::vector<long long> *pv
-                        = static_cast<std::vector<long long> *>(data_);
-                    std::vector<long long> &v = *pv;
-
-                    std::size_t const bufSize
-                        = std::numeric_limits<long long>::digits10 + 3;
-                    buf = new char[bufSize];
-                    snprintf(buf, bufSize, "%" LL_FMT_FLAGS "d", v[i]);
-                }
-                break;
-            case x_unsigned_long_long:
-                {
-                    std::vector<unsigned long long> *pv
-                        = static_cast<std::vector<unsigned long long> *>(data_);
-                    std::vector<unsigned long long> &v = *pv;
-
-                    std::size_t const bufSize
-                        = std::numeric_limits<unsigned long long>::digits10 + 3;
-                    buf = new char[bufSize];
-                    snprintf(buf, bufSize, "%" LL_FMT_FLAGS "u", v[i]);
-                }
-                break;
-            case x_double:
-                {
-                    std::vector<double> *pv
-                        = static_cast<std::vector<double> *>(data_);
-                    std::vector<double> &v = *pv;
-
-                    if (is_infinity_or_nan(v[i])) {
-                        throw soci_error(
-                            "Use element used with infinity or NaN, which are "
-                            "not supported by the MySQL server.");
-                    }
-
-                    std::string const s = double_to_cstring(v[i]);
-
-                    buf = new char[s.size() + 1];
-                    std::strcpy(buf, s.c_str());
-                }
-                break;
-            case x_stdtm:
-                {
-                    std::vector<std::tm> *pv
-                        = static_cast<std::vector<std::tm> *>(data_);
-                    std::vector<std::tm> &v = *pv;
-
-                    std::size_t const bufSize = 80;
-                    buf = new char[bufSize];
-
-                    snprintf(buf, bufSize, "\'%d-%02d-%02d %02d:%02d:%02d\'",
-                        v[i].tm_year + 1900, v[i].tm_mon + 1, v[i].tm_mday,
-                        v[i].tm_hour, v[i].tm_min, v[i].tm_sec);
-                }
-                break;
-
-            default:
-                throw soci_error(
-                    "Use vector element used with non-supported type.");
             }
-        }
+            break;
 
-        buffers_.push_back(buf);
+        case x_statement:
+        case x_rowid:
+        case x_blob:
+            // Those are unreachable, we would have thrown from
+            // prepare_for_bind() if we we were using one of them, only handle
+            // them here to avoid compiler warnings about unhandled enum
+            // elements.
+            break;
     }
 
-    if (position_ > 0)
+    // then handle indicators
+    if (ind != NULL)
     {
-        // binding by position
-        statement_.useByPosBuffers_[position_] = &buffers_[0];
+        for (std::size_t i = 0; i != indHolderVec_.size(); ++i, ++ind)
+        {
+            if (*ind == i_null)
+            {
+                indHolderVec_[i] = STMT_INDICATOR_NULL;
+            }
+            else
+            {
+                // for strings we have already set the values
+                if (type_ != x_stdstring && type_ != x_xmltype && type_ != x_longstring)
+                {
+                    indHolderVec_[i] = STMT_INDICATOR_NONE;
+                }
+            }
+        }
     }
     else
     {
-        // binding by name
-        statement_.useByNameBuffers_[name_] = &buffers_[0];
+        // no indicators - treat all fields as OK
+        for (std::size_t i = 0; i != indHolderVec_.size(); ++i)
+        {
+            // for strings we have already set the values
+            if (type_ != x_stdstring && type_ != x_xmltype && type_ != x_longstring)
+            {
+                indHolderVec_[i] = STMT_INDICATOR_NONE;
+            }
+        }
     }
+
+    memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
+    bindingInfo_.buffer_type = sqlType;
+    bindingInfo_.buffer = data;
+    bindingInfo_.buffer_length = size;
+    bindingInfo_.is_null = NULL;
+    bindingInfo_.error = NULL;
+    bindingInfo_.u.indicator = (char*)indHolderVec_.data();
+
+    statement_.addParameterBinding(&bindingInfo_);
+
 }
 
 std::size_t mysql_vector_use_type_backend::size()
 {
-    std::size_t sz SOCI_DUMMY_INIT(0);
-    switch (type_)
-    {
-        // simple cases
-    case x_char:         sz = get_vector_size<char>         (data_); break;
-    case x_short:        sz = get_vector_size<short>        (data_); break;
-    case x_integer:      sz = get_vector_size<int>          (data_); break;
-    case x_long_long:    sz = get_vector_size<long long>    (data_); break;
-    case x_unsigned_long_long:
-        sz = get_vector_size<unsigned long long>(data_);
-        break;
-    case x_double:       sz = get_vector_size<double>       (data_); break;
-    case x_stdstring:    sz = get_vector_size<std::string>  (data_); break;
-    case x_stdtm:        sz = get_vector_size<std::tm>      (data_); break;
-
-    default:
-        throw soci_error("Use vector element used with non-supported type.");
-    }
-
-    return sz;
+    return get_vector_size(type_, data_);
 }
 
 void mysql_vector_use_type_backend::clean_up()
 {
-    std::size_t const bsize = buffers_.size();
-    for (std::size_t i = 0; i != bsize; ++i)
+    if (buf_ != NULL)
     {
-        delete [] buffers_[i];
+        delete [] buf_;
+        buf_ = NULL;
     }
 }

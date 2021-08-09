@@ -80,7 +80,7 @@ struct mysql_standard_into_type_backend : details::standard_into_type_backend
 struct mysql_vector_into_type_backend : details::vector_into_type_backend
 {
     mysql_vector_into_type_backend(mysql_statement_backend &st)
-        : statement_(st) {}
+        : statement_(st), colSize_(0), buf_(NULL){}
 
     void define_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;
@@ -105,6 +105,16 @@ struct mysql_vector_into_type_backend : details::vector_into_type_backend
     void *data_;
     details::exchange_type type_;
     int position_;
+    std::vector<unsigned long> indHolderVec_;
+    enum_field_types mysqlType_;
+    int colSize_;
+    char* buf_;
+    MYSQL_BIND bindingInfo_;
+    std::vector<my_bool> isNull_;
+    std::vector<my_bool> isError_;
+
+private:
+    void rebind_row(std::size_t rowInd);
 };
 
 struct mysql_standard_use_type_backend : details::standard_use_type_backend
@@ -147,7 +157,7 @@ private:
 struct mysql_vector_use_type_backend : details::vector_use_type_backend
 {
     mysql_vector_use_type_backend(mysql_statement_backend &st)
-        : statement_(st), position_(0) {}
+        : statement_(st), position_(0), buf_(NULL), colSize_(0){}
 
     void bind_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;
@@ -167,6 +177,13 @@ struct mysql_vector_use_type_backend : details::vector_use_type_backend
     int position_;
     std::string name_;
     std::vector<char *> buffers_;
+    std::vector<int> indHolderVec_;
+    char* buf_;
+    int colSize_;
+    MYSQL_BIND bindingInfo_;
+private:
+    void prepare_indicators(std::size_t size);
+    void* prepare_for_bind(unsigned long& size, enum_field_types& sqlType);
 };
 
 struct mysql_session_backend;
@@ -238,6 +255,7 @@ struct mysql_statement_backend : details::statement_backend
     bool hasVectorIntoElements_;
     bool hasUseElements_;
     bool hasVectorUseElements_;
+    int vectorUseElementCount_;
 
     long long numRowsFetched_;
     long long rowsAffected_;

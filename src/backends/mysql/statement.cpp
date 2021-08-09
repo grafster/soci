@@ -16,9 +16,12 @@ using namespace soci::details;
 
 
 mysql_statement_backend::mysql_statement_backend(mysql_session_backend& session)
-    : session_(session), hstmt_(0), numRowsFetched_(0), fetchVectorByRows_(false),
-    hasVectorUseElements_(false), boundByName_(false), boundByPos_(false),
-    rowsAffected_(-1LL), metadata_(NULL), hasUseElements_(false), hasIntoElements_(false)
+    : session_(session), hstmt_(0), result_(NULL), rowsAffectedBulk_(0),
+    numberOfRows_(0), currentRow_(0), rowsToConsume_(0), justDescribed_(false),
+    hasIntoElements_(false), hasVectorIntoElements_(false),
+    hasUseElements_(false), vectorUseElementCount_(0), hasVectorUseElements_(false),
+    numRowsFetched_(0), rowsAffected_(-1LL), fetchVectorByRows_(false),
+    boundByName_(false), boundByPos_(false), metadata_(NULL)
 {
 }
 
@@ -142,7 +145,7 @@ mysql_statement_backend::execute(int number)
     unsigned long long rows_processed = 0;
     if (hasVectorUseElements_)
     {
-        if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &rows_processed) != 0)
+        if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &vectorUseElementCount_) != 0)
         {
             throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
         }
