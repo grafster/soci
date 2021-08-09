@@ -150,7 +150,7 @@ mysql_statement_backend::execute(int number)
 
     std::unique_ptr<MYSQL_BIND[]> bindArray;
 
-    if (hasUseElements_)
+    if (bindingInfoList_.size() > 0)
     {
         bindArray = std::make_unique<MYSQL_BIND[]>(bindingInfoList_.size());
 
@@ -190,7 +190,7 @@ mysql_statement_backend::execute(int number)
         unsigned long long res = mysql_stmt_affected_rows(hstmt_);
         if (res == -1)
         {
-            throw soci_error(std::string("Error getting number of affected rows - ") + mysql_stmt_error(hstmt_));
+            //throw soci_error(std::string("Error getting number of affected rows - ") + mysql_stmt_error(hstmt_));
         }
 
         rowsAffected_ = res;

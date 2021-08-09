@@ -53,7 +53,7 @@ struct mysql_statement_backend;
 struct mysql_standard_into_type_backend : details::standard_into_type_backend
 {
     mysql_standard_into_type_backend(mysql_statement_backend &st)
-        : statement_(st), isNull_(false), isError_(false){}
+        : statement_(st), isNull_(false), isError_(false), buf_(NULL){}
 
     void define_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;

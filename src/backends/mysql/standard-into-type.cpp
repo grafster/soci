@@ -18,7 +18,7 @@ using namespace soci;
 using namespace soci::details;
 
 void mysql_standard_into_type_backend::define_by_pos(
-    int & position, void * data, exchange_type type)
+    int & position, void * data, exchange_type type)    
 {
     data_ = data;
     type_ = type;
@@ -77,10 +77,12 @@ void mysql_standard_into_type_backend::define_by_pos(
     valueLen_ = 0;
     memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
     bindingInfo_.buffer_type = mysqlType_;
-    bindingInfo_.buffer = buf_;
+    bindingInfo_.buffer = data;
     bindingInfo_.buffer_length = size;
     bindingInfo_.is_null = &isNull_;
     bindingInfo_.error = &isError_;
+
+    statement_.addBindingInfo(&bindingInfo_);
 }
 
 void mysql_standard_into_type_backend::pre_fetch()

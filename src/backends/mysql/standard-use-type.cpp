@@ -169,8 +169,6 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     // first deal with data
     enum_field_types sqlType;
  
-    int bufLen = 0;
-
     void* const sqlData = prepare_for_bind(size_, sqlType);
 
     // If the indicator is i_null, we need to pass the corresponding value to
