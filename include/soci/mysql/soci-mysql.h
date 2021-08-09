@@ -177,7 +177,7 @@ struct mysql_vector_use_type_backend : details::vector_use_type_backend
     int position_;
     std::string name_;
     std::vector<char *> buffers_;
-    std::vector<int> indHolderVec_;
+    std::vector<char> indHolderVec_;
     char* buf_;
     int colSize_;
     MYSQL_BIND bindingInfo_;
