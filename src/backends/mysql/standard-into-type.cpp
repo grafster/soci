@@ -36,7 +36,7 @@ void mysql_standard_into_type_backend::define_by_pos(
     case x_stdstring:
     case x_longstring:
     case x_xmltype:
-        mysqlType_ = MYSQL_TYPE_VARCHAR;
+        mysqlType_ = MYSQL_TYPE_STRING;
         // For LONGVARCHAR fields the returned size is ODBC_MAX_COL_SIZE
         // (or 0 for some backends), but this doesn't correspond to the actual
         // field size, which can be (much) greater. For now we just used

@@ -42,11 +42,9 @@ void* mysql_standard_use_type_backend::prepare_for_bind(
 
     case x_char:
         sqlType = MYSQL_TYPE_STRING;
-        size = 2;
+        size = 1;
         buf_ = new char[size];
         buf_[0] = exchange_type_cast<x_char>(data_);
-        buf_[1] = '\0';
-        indHolder_ = STMT_INDICATOR_NTS;
         break;
     case x_stdstring:
     {
@@ -59,7 +57,7 @@ void* mysql_standard_use_type_backend::prepare_for_bind(
     {
         std::tm const& t = exchange_type_cast<x_stdtm>(data_);
 
-        sqlType = MYSQL_TYPE_DATE;
+        sqlType = MYSQL_TYPE_DATETIME;
         
         buf_ = new char[sizeof(MYSQL_TIME)];
         memset(buf_, 0, sizeof(MYSQL_TIME));
@@ -180,6 +178,7 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     // null or not.
     static char indHolderNull = STMT_INDICATOR_NULL;
     static my_bool myBoolTrue = true;
+    static my_bool myBoolFalse = false;
 
     memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
 
@@ -188,7 +187,7 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     bindingInfo_.buffer_type = sqlType;
     bindingInfo_.length = &size_;
 
-    if (*ind == i_null)
+    if (ind != NULL && *ind == i_null)
     {
         bindingInfo_.is_null = &myBoolTrue;
     }    

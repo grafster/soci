@@ -199,7 +199,7 @@ mysql_statement_backend::execute(int number)
 
         if (mysql_stmt_bind_result(hstmt_, resultBindArray.get()) != 0)
         {
-            throw soci_error("Parameter binding error");
+            throw soci_error(std::string("Parameter binding error - ") + mysql_stmt_error(hstmt_));
         }
     }
 
@@ -329,6 +329,10 @@ int mysql_statement_backend::prepare_for_describe()
     // list in describe_column below
 
     metadata_ = mysql_stmt_result_metadata(hstmt_);
+    if (metadata_ == NULL)
+    {
+        throw soci_error(std::string("Error loading statement data - ") + mysql_stmt_error(hstmt_));
+    }
 
     return static_cast<int>(mysql_stmt_field_count(hstmt_));
 }
@@ -387,7 +391,7 @@ std::size_t mysql_statement_backend::column_size(int colNum)
 
     if (metadata_ == NULL)
     {
-        throw soci_error("Internal error - prepare_for_describe not called before column_size");
+        prepare_for_describe();
     }
 
     MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum));

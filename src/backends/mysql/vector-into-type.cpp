@@ -134,6 +134,10 @@ void mysql_vector_into_type_backend::do_post_fetch_row(
         v[rowNum] = *(int*)buf_;
 
     }
+    else
+    {
+        throw soci_error("Unhandled type in do_post_fetch_row");
+    }
     /*
     else if (type_ == x_char)
     {
