@@ -249,9 +249,17 @@ mysql_statement_backend::do_fetch(int rowNumber)
         return ef_no_data;
     }
 
+    
     if (rc != 0)
     {
-        throw soci_error(std::string("Error fetching data - ") + mysql_stmt_error(hstmt_));
+        if (rc == MYSQL_DATA_TRUNCATED)
+        {
+            throw soci_error(std::string("Error fetching data (truncation) - ") + mysql_stmt_error(hstmt_));
+        }
+        else
+        {
+            throw soci_error(std::string("Error fetching data - ") + mysql_stmt_error(hstmt_));
+        }
     }
 
     for (std::size_t j = 0; j != intos_.size(); ++j)
@@ -364,6 +372,7 @@ void mysql_statement_backend::describe_column(int colNum, data_type & type,
     case MYSQL_TYPE_DATE:
     case MYSQL_TYPE_TIME:
     case MYSQL_TYPE_TIMESTAMP:
+    case MYSQL_TYPE_DATETIME:
         type = dt_date;
         break;
     case MYSQL_TYPE_DOUBLE:
