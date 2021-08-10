@@ -92,15 +92,18 @@ void* mysql_vector_use_type_backend::prepare_for_bind(unsigned long &size,
 
             prepare_indicators(vsize);
 
-            size = sizeof(char) * 2;
-            buf_ = new char[size * vsize];
+            size = sizeof(char);
+            // The buffer is an array of pointers to the actual char data
+            // size is the size of the data at that pointer, not the size of the pointer itself
+            buf_ = new char[sizeof (void*) * vsize];
 
-            char *pos = buf_;
+            char **pos = reinterpret_cast<char**>(buf_);
 
+            // 1 is the default value for all the lengths
+            lengths_.resize(vsize, 1);
             for (std::size_t i = 0; i != vsize; ++i)
             {
-                *pos++ = (*vp)[i];
-                *pos++ = 0;
+                *pos++ = &(*vp)[i];
             }
 
             sqlType = MYSQL_TYPE_STRING;
@@ -111,32 +114,29 @@ void* mysql_vector_use_type_backend::prepare_for_bind(unsigned long &size,
     case x_xmltype:
     case x_longstring:
         {
-            std::size_t maxSize = 0;
             std::size_t const vecSize = get_vector_size(type_, data_);
             prepare_indicators(vecSize);
-            for (std::size_t i = 0; i != vecSize; ++i)
-            {
-                std::size_t sz = vector_string_value(type_, data_, i).length();
+            lengths_.resize(vecSize);
 
-                indHolderVec_[i] = sz;
-                maxSize = sz > maxSize ? sz : maxSize;
-            }
+            // The buffer contains an array of pointers to the actual text strings
+            buf_ = new char[sizeof(void*) * vecSize];
 
-            maxSize++; // For terminating nul.
+            const char** ptrBuffer = reinterpret_cast<const char**>(buf_);
 
-            buf_ = new char[maxSize * vecSize];
-            memset(buf_, 0, maxSize * vecSize);
-
-            char *pos = buf_;
             for (std::size_t i = 0; i != vecSize; ++i)
             {
                 std::string& value = vector_string_value(type_, data_, i);
-                memcpy(pos, value.c_str(), value.length());
-                pos += maxSize;
+
+                std::size_t sz = value.length();
+
+                indHolderVec_[i] = STMT_INDICATOR_NONE;
+                lengths_[i] = sz;
+
+                ptrBuffer[i] = value.data();                
+                
             }
 
             data = buf_;
-            size = static_cast<int>(maxSize);
 
             sqlType = MYSQL_TYPE_STRING;
         }
@@ -148,7 +148,10 @@ void* mysql_vector_use_type_backend::prepare_for_bind(unsigned long &size,
 
             prepare_indicators(vp->size());
 
-            buf_ = new char[sizeof(MYSQL_TIME) * vp->size()];
+            // The buffer is an array of pointers to the actual MYSQL_TIME structs
+            buf_ = new char[sizeof(void*) * vp->size()];
+
+            lengths_.resize(vp->size(), sizeof(MYSQL_TIME));
 
             sqlType = MYSQL_TYPE_TIMESTAMP;
             data = buf_;
@@ -243,7 +246,7 @@ void mysql_vector_use_type_backend::pre_use(indicator const *ind)
         case x_stdstring:
         case x_xmltype:
         case x_longstring:
-            non_null_indicator = STMT_INDICATOR_NTS;
+            non_null_indicator = STMT_INDICATOR_NONE;
             break;
 
         case x_stdtm:
@@ -253,21 +256,27 @@ void mysql_vector_use_type_backend::pre_use(indicator const *ind)
 
                 std::vector<std::tm> &v(*vp);
 
-                char *pos = buf_;
+                MYSQL_TIME** timePointerArray = reinterpret_cast<MYSQL_TIME**>(buf_);
+
                 std::size_t const vsize = v.size();
+                timeVec_.resize(vsize);
+
                 for (std::size_t i = 0; i != vsize; ++i)
                 {
                     std::tm t = v[i];
 
-                    MYSQL_TIME * ts = reinterpret_cast<MYSQL_TIME*>(pos);
+                    MYSQL_TIME& ts = timeVec_[i];
 
-                    ts->year = t.tm_year + 1900;
-                    ts->month = t.tm_mon + 1;
-                    ts->day = t.tm_mday;
-                    ts->hour = t.tm_hour;
-                    ts->minute = t.tm_min;
-                    ts->second = t.tm_sec;
-                    pos += sizeof(MYSQL_TIME);
+                    ts.year = t.tm_year + 1900;
+                    ts.month = t.tm_mon + 1;
+                    ts.day = t.tm_mday;
+                    ts.hour = t.tm_hour;
+                    ts.minute = t.tm_min;
+                    ts.second = t.tm_sec;
+
+                    timePointerArray[i] = &timeVec_[i];
+                    
+
                 }
             }
             break;
@@ -322,6 +331,11 @@ void mysql_vector_use_type_backend::pre_use(indicator const *ind)
     bindingInfo_.error = NULL;
     bindingInfo_.u.indicator = (char*)indHolderVec_.data();
     bindingInfo_.is_unsigned = (type_ == x_unsigned_long_long);
+
+    if (type_ == x_char || type_ == x_stdstring || type_ == x_stdtm)
+    {
+        bindingInfo_.length = lengths_.data();
+    }
 
     statement_.addParameterBinding(&bindingInfo_);
 

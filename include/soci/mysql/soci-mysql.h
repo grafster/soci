@@ -178,9 +178,13 @@ struct mysql_vector_use_type_backend : details::vector_use_type_backend
     std::string name_;
     std::vector<char *> buffers_;
     std::vector<char> indHolderVec_;
+    std::vector<unsigned long> lengths_;
     char* buf_;
     int colSize_;
     MYSQL_BIND bindingInfo_;
+
+    // We need somewhere to store the acutual time objects if we're inserting times
+    std::vector<MYSQL_TIME> timeVec_;
 private:
     void prepare_indicators(std::size_t size);
     void* prepare_for_bind(unsigned long& size, enum_field_types& sqlType);
