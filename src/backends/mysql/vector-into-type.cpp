@@ -134,6 +134,15 @@ void mysql_vector_into_type_backend::do_post_fetch_row(
         v[rowNum] = *(int*)buf_;
 
     }
+    else if (type_ == x_char)
+    {
+        std::vector<char>* vp
+            = static_cast<std::vector<char> *>(data_);
+        std::vector<char>& v(*vp);
+
+        v[rowNum] = *(char*)buf_;
+
+    }
     else
     {
         throw soci_error("Unhandled type in do_post_fetch_row");
@@ -251,7 +260,8 @@ void mysql_vector_into_type_backend::post_fetch(bool gotData, indicator* ind)
 
 void mysql_vector_into_type_backend::resize(std::size_t sz)
 {
-    // do_nothing
+    indicators_.resize(sz);
+    resize_vector(type_, data_, sz);
 }
 
 std::size_t mysql_vector_into_type_backend::size()
