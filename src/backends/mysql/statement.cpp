@@ -141,7 +141,6 @@ statement_backend::exec_fetch_result
 mysql_statement_backend::execute(int number)
 {
     // Store the number of rows processed by this call.
-    unsigned long long rows_processed = 0;
     unsigned long cursorType = 0;
     if (hasVectorUseElements_)
     {
@@ -215,8 +214,8 @@ mysql_statement_backend::execute(int number)
     }
     else if (hasVectorUseElements_)
     {
-        // We already have the number of rows, no need to do anything.
-        rowsAffected_ = rows_processed;
+        // Get the number of rows affected from the API
+        rowsAffected_ = mysql_stmt_affected_rows(hstmt_);
     }
     else // We need to retrieve the number of rows affected explicitly.
     {
@@ -282,7 +281,7 @@ mysql_statement_backend::fetch(int number)
 
     statement_backend::exec_fetch_result res SOCI_DUMMY_INIT(ef_success);
 
-    int curNumRowsFetched = 0;
+    // int curNumRowsFetched = 0;
     //SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &curNumRowsFetched, 0);
 
     for (int row = 0; row < number; ++row)
