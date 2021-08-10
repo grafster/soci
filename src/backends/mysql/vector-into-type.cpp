@@ -119,12 +119,12 @@ void mysql_vector_into_type_backend::do_post_fetch_row(
 
     if (isNull_)
     {
-        indicators_.push_back(i_null);
+        indicators_[rowNum] =  i_null;
         return;
     }
     else
     {
-        indicators_.push_back(i_ok);
+        indicators_[rowNum] = i_ok;
     }
 
     if (type_ == x_integer)
