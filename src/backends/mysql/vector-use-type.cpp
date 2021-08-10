@@ -59,6 +59,7 @@ void* mysql_vector_use_type_backend::prepare_for_bind(unsigned long &size,
         }
         break;
     case x_long_long:
+    case x_unsigned_long_long:
         {
             std::vector<long long> *vp =
                 static_cast<std::vector<long long> *>(data_);
@@ -320,6 +321,7 @@ void mysql_vector_use_type_backend::pre_use(indicator const *ind)
     bindingInfo_.is_null = NULL;
     bindingInfo_.error = NULL;
     bindingInfo_.u.indicator = (char*)indHolderVec_.data();
+    bindingInfo_.is_unsigned = (type_ == x_unsigned_long_long);
 
     statement_.addParameterBinding(&bindingInfo_);
 

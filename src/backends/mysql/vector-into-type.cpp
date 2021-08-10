@@ -52,6 +52,7 @@ void mysql_vector_into_type_backend::define_by_pos(
         size = sizeof(int);
         break;
     case x_long_long:
+    case x_unsigned_long_long:
         mysqlType_ = MYSQL_TYPE_LONGLONG;
         size = sizeof(long long);
         break;
@@ -101,6 +102,7 @@ void mysql_vector_into_type_backend::define_by_pos(
     bindingInfo_.is_null = &isNull_;
     bindingInfo_.error = &isError_;
     bindingInfo_.length = &length_;
+    bindingInfo_.is_unsigned = (type_ == x_unsigned_long_long);
 
     statement_.addResultBinding(&bindingInfo_);
 }
@@ -150,6 +152,24 @@ void mysql_vector_into_type_backend::do_post_fetch_row(
         std::vector<std::string>& v(*vp);
 
         v[rowNum].assign(buf_, length_);
+
+    }
+    else if (type_ == x_long_long)
+    {
+        std::vector<long long>* vp
+            = static_cast<std::vector<long long> *>(data_);
+        std::vector<long long>& v(*vp);
+
+        v[rowNum] = *(long long*)buf_;
+
+    }
+    else if (type_ == x_unsigned_long_long)
+    {
+        std::vector<unsigned long long>* vp
+            = static_cast<std::vector<unsigned long long> *>(data_);
+        std::vector<unsigned long long>& v(*vp);
+
+        v[rowNum] = *(unsigned long long*)buf_;
 
     }
     else if (type_ == x_short)

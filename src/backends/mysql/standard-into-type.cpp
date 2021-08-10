@@ -57,6 +57,7 @@ void mysql_standard_into_type_backend::define_by_pos(
         size = sizeof(int);
         break;
     case x_long_long:
+    case x_unsigned_long_long:
         mysqlType_ = MYSQL_TYPE_LONGLONG;
         size = sizeof(long long);
         break;
@@ -81,6 +82,7 @@ void mysql_standard_into_type_backend::define_by_pos(
     bindingInfo_.buffer_length = size;
     bindingInfo_.is_null = &isNull_;
     bindingInfo_.error = &isError_;
+    bindingInfo_.is_unsigned = (type_ == x_unsigned_long_long);
 
     statement_.addResultBinding(&bindingInfo_);
 }

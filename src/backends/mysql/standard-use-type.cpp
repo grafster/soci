@@ -32,6 +32,7 @@ void* mysql_standard_use_type_backend::prepare_for_bind(
         size = sizeof(int);
         break;
     case x_long_long:
+    case x_unsigned_long_long:
           sqlType = MYSQL_TYPE_LONGLONG;
           size = sizeof(long long);
         break;
@@ -186,6 +187,7 @@ void mysql_standard_use_type_backend::pre_use(indicator const *ind)
     bindingInfo_.buffer_length = size_;
     bindingInfo_.buffer_type = sqlType;
     bindingInfo_.length = &size_;
+    bindingInfo_.is_unsigned = (type_ == x_unsigned_long_long);
 
     if (ind != NULL && *ind == i_null)
     {
