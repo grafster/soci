@@ -143,6 +143,43 @@ void mysql_vector_into_type_backend::do_post_fetch_row(
         v[rowNum] = *(char*)buf_;
 
     }
+    else if (type_ == x_stdstring)
+    {
+        std::vector<std::string>* vp
+            = static_cast<std::vector<std::string> *>(data_);
+        std::vector<std::string>& v(*vp);
+
+        v[rowNum].assign(buf_, length_);
+
+    }
+    else if (type_ == x_short)
+    {
+        std::vector<short>* vp
+            = static_cast<std::vector<short> *>(data_);
+        std::vector<short>& v(*vp);
+
+        v[rowNum] = *(short*)buf_;
+
+    }
+    else if (type_ == x_double)
+    {
+        std::vector<double>* vp
+            = static_cast<std::vector<double> *>(data_);
+        std::vector<double>& v(*vp);
+
+        v[rowNum] = *(double*)buf_;
+    }
+    else if (type_ == x_stdtm)
+    {
+        std::vector<std::tm>* vp
+            = static_cast<std::vector<std::tm> *>(data_);
+        std::vector<std::tm>& v(*vp);
+
+        MYSQL_TIME* ts = reinterpret_cast<MYSQL_TIME*>(buf_);
+        details::mktime_from_ymdhms(v[rowNum],
+            ts->year, ts->month, ts->day,
+            ts->hour, ts->minute, ts->second);
+    }
     else
     {
         throw soci_error("Unhandled type in do_post_fetch_row");
