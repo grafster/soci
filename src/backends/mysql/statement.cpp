@@ -345,7 +345,9 @@ void mysql_statement_backend::describe_column(int colNum, data_type & type,
         throw soci_error("Internal error - prepare_for_describe not called before describe_column");
     }
 
-    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum));
+    // The values passed in are 1 indexed, but mysql_fetch_field_direct expects a zero indexed value,
+    // so -1
+    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum-1));
 
     if (field == NULL)
     {
