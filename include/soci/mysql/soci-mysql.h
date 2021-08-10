@@ -80,7 +80,9 @@ struct mysql_standard_into_type_backend : details::standard_into_type_backend
 struct mysql_vector_into_type_backend : details::vector_into_type_backend
 {
     mysql_vector_into_type_backend(mysql_statement_backend &st)
-        : statement_(st), colSize_(0), buf_(NULL){}
+        : statement_(st), colSize_(0), buf_(NULL), isNull_(false),
+        isError_(false),data_(NULL), position_(0), length_(0)
+    {}
 
     void define_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;
@@ -98,23 +100,21 @@ struct mysql_vector_into_type_backend : details::vector_into_type_backend
     // however we may need to call SQLFetch() multiple times, so we call this
     // function instead after each call to it to retrieve the given range of
     // rows.
-    void do_post_fetch_rows(std::size_t beginRow, std::size_t endRow); 
+    void do_post_fetch_row(std::size_t beginRow); 
 
     mysql_statement_backend &statement_;
-
     void *data_;
     details::exchange_type type_;
     int position_;
-    std::vector<unsigned long> indHolderVec_;
+    std::vector<soci::indicator> indicators_;
     enum_field_types mysqlType_;
     int colSize_;
     char* buf_;
     MYSQL_BIND bindingInfo_;
-    std::vector<my_bool> isNull_;
-    std::vector<my_bool> isError_;
+    my_bool isNull_;
+    my_bool isError_;
+    unsigned long length_;
 
-private:
-    void rebind_row(std::size_t rowInd);
 };
 
 struct mysql_standard_use_type_backend : details::standard_use_type_backend
@@ -256,7 +256,7 @@ struct mysql_statement_backend : details::statement_backend
     bool hasUseElements_;
     bool hasVectorUseElements_;
     int vectorUseElementCount_;
-
+    int vectorIntoElementCount_;
     long long numRowsFetched_;
     long long rowsAffected_;
     bool fetchVectorByRows_;
@@ -284,7 +284,7 @@ struct mysql_statement_backend : details::statement_backend
 
 private:
     // fetch() helper wrapping mysql_stmt_fetch() call for the given range of rows.
-    exec_fetch_result do_fetch(int beginRow, int endRow);
+    exec_fetch_result do_fetch(int rowNum);
 };
 
 struct mysql_rowid_backend : details::rowid_backend

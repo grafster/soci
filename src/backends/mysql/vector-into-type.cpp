@@ -37,35 +37,36 @@ void mysql_vector_into_type_backend::define_by_pos(
     if (vectorSize == 0)
     {
          throw soci_error("Vectors of size 0 are not allowed.");
-    }
-
-    indHolderVec_.resize(vectorSize);
-    isNull_.resize(vectorSize);
-    isError_.resize(vectorSize);
-
+    }    
+    statement_.vectorIntoElementCount_ = vectorSize;
+    int size = 0;
     switch (type)
     {
     // simple cases
     case x_short:
         mysqlType_ = MYSQL_TYPE_SHORT;
+        size = sizeof(short);
         break;
     case x_integer:
         mysqlType_ = MYSQL_TYPE_LONG;
+        size = sizeof(int);
         break;
     case x_long_long:
         mysqlType_ = MYSQL_TYPE_LONGLONG;
+        size = sizeof(long long);
         break;
     case x_double:
         mysqlType_ = MYSQL_TYPE_DOUBLE;
+        size = sizeof(double);
+
         break;
 
     // cases that require adjustments and buffer management
 
     case x_char:
         mysqlType_ = MYSQL_TYPE_STRING;
-
         colSize_ = sizeof(char) * 2;
-        buf_ = new char[colSize_ * vectorSize];
+        size = colSize_;
         break;
     case x_stdstring:
     case x_xmltype:
@@ -76,101 +77,65 @@ void mysql_vector_into_type_backend::define_by_pos(
             colSize_ = statement_.column_size(position);
 
             colSize_++;
-
-            // If we are fetching by a single row, allocate the buffer only for
-            // one value.
-            const std::size_t elementsCount
-                = statement_.fetchVectorByRows_ ? 1 : vectorSize;
-            buf_ = new char[colSize_ * elementsCount];
+            size = colSize_;
         }
         break;
     case x_stdtm:
         mysqlType_ = MYSQL_TYPE_TIMESTAMP;
-
         colSize_ = sizeof(MYSQL_TIME);
-        buf_ = new char[colSize_ * vectorSize];
+        size = colSize_;
         break;
-
     default:
         throw soci_error("Into element used with non-supported type.");
     }
 
     position++;
-
-    rebind_row(0);
-}
-
-void mysql_vector_into_type_backend::rebind_row(std::size_t rowInd)
-{
-    void* elementPtr = NULL;
-    int size = 0;
-    switch (type_)
-    {
-    // simple cases
-    case x_short:
-        elementPtr = &exchange_vector_type_cast<x_short>(data_)[rowInd];
-        size = sizeof(short);
-        break;
-    case x_integer:
-        elementPtr = &exchange_vector_type_cast<x_integer>(data_)[rowInd];
-        size = sizeof(int);
-        break;
-    case x_long_long:
-        elementPtr = &exchange_vector_type_cast<x_long_long>(data_)[rowInd];
-        size = sizeof(long long);
-        break;
-    case x_unsigned_long_long:
-        elementPtr = &exchange_vector_type_cast<x_unsigned_long_long>(data_)[rowInd];
-        size = sizeof(unsigned long long);
-        break;
-    case x_double:
-        elementPtr = &exchange_vector_type_cast<x_double>(data_)[rowInd];
-        size = sizeof(double);
-        break;
-
-    // cases that require adjustments and buffer management
-
-    case x_char:
-    case x_stdstring:
-    case x_xmltype:
-    case x_longstring:
-    case x_stdtm:
-        // Do nothing.
-        break;
-
-    default:
-        throw soci_error("Into element used with non-supported type.");
-    }
-
-    if (elementPtr == NULL)
-    {
-        // It's one of the types for which we use fixed buffer.
-        elementPtr = buf_;
-        size = colSize_;
-    }
+    buf_ = new char[size];
 
     const int pos = static_cast<int>(position_ + 1);
 
     memset(&bindingInfo_, 0, sizeof(MYSQL_BIND));
     bindingInfo_.buffer_type = mysqlType_;
-    bindingInfo_.buffer = elementPtr;
+    bindingInfo_.buffer = buf_;
     bindingInfo_.buffer_length = size;
-    bindingInfo_.is_null = isNull_.data();
-    bindingInfo_.error = isError_.data();
-    bindingInfo_.length = indHolderVec_.data();
+    bindingInfo_.is_null = &isNull_;
+    bindingInfo_.error = &isError_;
+    bindingInfo_.length = &length_;
 
     statement_.addResultBinding(&bindingInfo_);
 }
+
 
 void mysql_vector_into_type_backend::pre_fetch()
 {
     // nothing to do for the supported types
 }
 
-void mysql_vector_into_type_backend::do_post_fetch_rows(
-    std::size_t beginRow, std::size_t endRow)
+void mysql_vector_into_type_backend::do_post_fetch_row(
+    std::size_t rowNum)
 {
-    if (type_ == x_char)
+
+    if (isNull_)
+    {
+        indicators_.push_back(i_null);
+        return;
+    }
+    else
+    {
+        indicators_.push_back(i_ok);
+    }
+
+    if (type_ == x_integer)
+    {
+        std::vector<int>* vp
+                = static_cast<std::vector<int> *>(data_);
+        std::vector<int>& v(*vp);
+
+        v[rowNum] = *(int*)buf_;
+
+    }
+    /*
+    else if (type_ == x_char)
     {
         std::vector<char> *vp
             = static_cast<std::vector<char> *>(data_);
@@ -188,7 +153,7 @@ void mysql_vector_into_type_backend::do_post_fetch_rows(
         const char *pos = buf_;
         for (std::size_t i = beginRow; i != endRow; ++i, pos += colSize_)
         {
-            int len = indHolderVec_[i];
+            int len = indicator_;
 
             std::string& value = vector_string_value(type_, data_, i);
             if (len == -1)
@@ -244,7 +209,7 @@ void mysql_vector_into_type_backend::do_post_fetch_rows(
                                         ts->hour, ts->minute, ts->second);
             pos += colSize_;
         }
-    }
+    }*/
 }
 
 void mysql_vector_into_type_backend::post_fetch(bool gotData, indicator* ind)
@@ -255,9 +220,14 @@ void mysql_vector_into_type_backend::post_fetch(bool gotData, indicator* ind)
     {
         std::size_t rows = statement_.numRowsFetched_;
 
+        if (rows > 0 && indicators_.size() != rows)
+        {
+            throw soci_error("Internal error - indicators not set");
+        }
+
         for (std::size_t i = 0; i < rows; ++i)
         {
-            if (isNull_[i])
+            if (indicators_[i] == i_null)
             {
                 if (ind == NULL)
                 {
@@ -272,13 +242,12 @@ void mysql_vector_into_type_backend::post_fetch(bool gotData, indicator* ind)
             }
         }
     }
+    indicators_.clear();
 }
 
 void mysql_vector_into_type_backend::resize(std::size_t sz)
 {
-    // stays 64bit but gets but casted, see: get_sqllen_from_vector_at(...)
-    indHolderVec_.resize(sz);
-    resize_vector(type_, data_, sz);
+    // do_nothing
 }
 
 std::size_t mysql_vector_into_type_backend::size()

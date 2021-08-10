@@ -18,7 +18,7 @@ using namespace soci::details;
 mysql_statement_backend::mysql_statement_backend(mysql_session_backend& session)
     : session_(session), hstmt_(0), result_(NULL), rowsAffectedBulk_(0),
     numberOfRows_(0), currentRow_(0), rowsToConsume_(0), justDescribed_(false),
-    hasIntoElements_(false), hasVectorIntoElements_(false),
+    hasIntoElements_(false), hasVectorIntoElements_(false), vectorIntoElementCount_(0),
     hasUseElements_(false), vectorUseElementCount_(0), hasVectorUseElements_(false),
     numRowsFetched_(0), rowsAffected_(-1LL), fetchVectorByRows_(false),
     boundByName_(false), boundByPos_(false), metadata_(NULL)
@@ -124,7 +124,6 @@ void mysql_statement_backend::prepare(std::string const & query,
         names_.push_back(name);
         query_ += "?";
     }
-
     if (mysql_stmt_prepare(hstmt_, query_.c_str(), static_cast<unsigned long>(query_.size())) != 0)
     {
         std::ostringstream ss;
@@ -143,13 +142,30 @@ mysql_statement_backend::execute(int number)
 {
     // Store the number of rows processed by this call.
     unsigned long long rows_processed = 0;
+    unsigned long cursorType = 0;
     if (hasVectorUseElements_)
     {
         if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &vectorUseElementCount_) != 0)
         {
             throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
         }
-    }   
+    }
+    else if (hasVectorIntoElements_)
+    {
+        // Do we want to use a cursor, or will that be slow???
+        cursorType = CURSOR_TYPE_READ_ONLY;
+        if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_CURSOR_TYPE, &cursorType) != 0)
+        {
+            throw soci_error(std::string("Statement cursor attribute set failed - ") + mysql_stmt_error(hstmt_));
+        }
+
+
+        if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_PREFETCH_ROWS, &vectorIntoElementCount_) != 0)
+        {
+            throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
+        }
+
+    }
 
     std::unique_ptr<MYSQL_BIND[]> parameterBindArray;
 
@@ -195,7 +211,6 @@ mysql_statement_backend::execute(int number)
 
     if (mysql_stmt_execute(hstmt_) != 0)
     {
-
         throw soci_error(std::string("Statement execute failed - ") + mysql_stmt_error(hstmt_));
     }
     else if (hasVectorUseElements_)
@@ -218,11 +233,6 @@ mysql_statement_backend::execute(int number)
 
     if (number > 0 && colCount > 0)
     {
-        if (mysql_stmt_store_result(hstmt_) != 0)
-        {
-            throw soci_error(std::string("Error buffering results - ") + mysql_stmt_error(hstmt_));
-        }
-
         return fetch(number);
     }
 
@@ -230,7 +240,7 @@ mysql_statement_backend::execute(int number)
 }
 
 statement_backend::exec_fetch_result
-mysql_statement_backend::do_fetch(int beginRow, int endRow)
+mysql_statement_backend::do_fetch(int rowNumber)
 {
     int rc = mysql_stmt_fetch(hstmt_);
 
@@ -239,14 +249,14 @@ mysql_statement_backend::do_fetch(int beginRow, int endRow)
         return ef_no_data;
     }
 
-    if (rc == 1)
+    if (rc != 0)
     {
-        throw soci_error(std::string("Error fetching data - ") + mysql_error(session_.conn_));
+        throw soci_error(std::string("Error fetching data - ") + mysql_stmt_error(hstmt_));
     }
 
     for (std::size_t j = 0; j != intos_.size(); ++j)
     {
-        intos_[j]->do_post_fetch_rows(beginRow, endRow);
+        intos_[j]->do_post_fetch_row(rowNumber);
     }
 
     return ef_success;
@@ -262,55 +272,31 @@ mysql_statement_backend::fetch(int number)
         intos_[i]->resize(number);
     }
 
-    // Is there a MySQL equivalent of this??
-    // SQLSetStmtAttr(hstmt_, SQL_ATTR_ROW_BIND_TYPE, SQL_BIND_BY_COLUMN, 0);
-
     statement_backend::exec_fetch_result res SOCI_DUMMY_INIT(ef_success);
 
-    // Usually we try to fetch the entire vector at once, but if some into
-    // string columns are bigger than 8KB (ODBC_MAX_COL_SIZE) then we use
-    // 100MB buffer for that columns. So in this case we downgrade to using
-    // scalar fetches to hold the buffer only for a single row and not
-    // rows_count * 100MB.
-    // See mysql_vector_into_type_backend::define_by_pos().
-    if (!fetchVectorByRows_)
-    {
-        // OK, I don't know what to do here yet
-        /*
-        SQLULEN row_array_size = static_cast<SQLULEN>(number);
-        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROW_ARRAY_SIZE, (SQLPOINTER)row_array_size, 0);
+    int curNumRowsFetched = 0;
+    //SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &curNumRowsFetched, 0);
 
-        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &numRowsFetched_, 0);
-        */
-        res = do_fetch(0, number);
-    }
-    else // Use multiple calls to SQLFetch().
+    for (int row = 0; row < number; ++row)
     {
-        // OK, I don't know what to do here yet
-        throw soci_error("Not implemented");
-        /*
-        SQLULEN curNumRowsFetched = 0;
-        SQLSetStmtAttr(hstmt_, SQL_ATTR_ROWS_FETCHED_PTR, &curNumRowsFetched, 0);
 
-        for (int row = 0; row < number; ++row)
+        // Unfortunately we need to redefine all vector intos which
+        // were bound to the first element of the vector initially.
+        //
+        // Note that we need to do it even for row == 0 as this might not
+        // be the first call to fetch() and so the current bindings might
+        // not be the same as initial ones.
+
+        /*for (std::size_t j = 0; j != intos_.size(); ++j)
         {
-            // Unfortunately we need to redefine all vector intos which
-            // were bound to the first element of the vector initially.
-            //
-            // Note that we need to do it even for row == 0 as this might not
-            // be the first call to fetch() and so the current bindings might
-            // not be the same as initial ones.
-            for (std::size_t j = 0; j != intos_.size(); ++j)
-            {
-                intos_[j]->rebind_row(row);
-            }
-
-            res = do_fetch(row, row + 1);
-            if (res != ef_success)
-                break;
-
-            numRowsFetched_ += curNumRowsFetched;
+            intos_[j]->rebind_row(row);
         }*/
+
+        res = do_fetch(row);
+        if (res != ef_success)
+            break;
+
+        numRowsFetched_ ++;
     }
 
     return res;
@@ -430,6 +416,7 @@ mysql_standard_use_type_backend * mysql_statement_backend::make_use_type_backend
 mysql_vector_into_type_backend *
 mysql_statement_backend::make_vector_into_type_backend()
 {
+    hasVectorIntoElements_ = true;
     return new mysql_vector_into_type_backend(*this);
 }
 
