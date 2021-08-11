@@ -57,7 +57,7 @@ struct mysql_statement_backend;
 struct mysql_standard_into_type_backend : details::standard_into_type_backend
 {
     mysql_standard_into_type_backend(mysql_statement_backend &st)
-        : statement_(st), isNull_(false), isError_(false), buf_(NULL){}
+        : statement_(st), buf_(NULL), isNull_(false), isError_(false){}
 
     void define_by_pos(int &position,
         void *data, details::exchange_type type) SOCI_OVERRIDE;
@@ -84,8 +84,8 @@ struct mysql_standard_into_type_backend : details::standard_into_type_backend
 struct mysql_vector_into_type_backend : details::vector_into_type_backend
 {
     mysql_vector_into_type_backend(mysql_statement_backend &st)
-        : statement_(st), colSize_(0), buf_(NULL), isNull_(false),
-        isError_(false),data_(NULL), position_(0), length_(0)
+        : statement_(st), data_(NULL), position_(0), colSize_(0), buf_(NULL), isNull_(false),
+        isError_(false), length_(0)
     {}
 
     void define_by_pos(int &position,
@@ -224,12 +224,12 @@ struct mysql_statement_backend : details::statement_backend
     mysql_vector_into_type_backend * make_vector_into_type_backend() SOCI_OVERRIDE;
     mysql_vector_use_type_backend * make_vector_use_type_backend() SOCI_OVERRIDE;
 
-    void mysql_statement_backend::addParameterBinding(MYSQL_BIND* bindingInfo)
+    void addParameterBinding(MYSQL_BIND* bindingInfo)
     {
         parameterBindingList_.push_back(bindingInfo);
     }
 
-    void mysql_statement_backend::addResultBinding(MYSQL_BIND* bindingInfo)
+    void addResultBinding(MYSQL_BIND* bindingInfo)
     {
         resultBindingList_.push_back(bindingInfo);
     }
