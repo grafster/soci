@@ -18,8 +18,8 @@ using namespace soci::details;
 mysql_statement_backend::mysql_statement_backend(mysql_session_backend& session)
     : session_(session), hstmt_(0), result_(NULL), rowsAffectedBulk_(0),
     numberOfRows_(0), currentRow_(0), rowsToConsume_(0), justDescribed_(false),
-    hasIntoElements_(false), hasVectorIntoElements_(false), vectorIntoElementCount_(0),
-    hasUseElements_(false), vectorUseElementCount_(0), hasVectorUseElements_(false),
+    hasIntoElements_(false), hasVectorIntoElements_(false), hasUseElements_(false), 
+    hasVectorUseElements_(false), vectorUseElementCount_(0), vectorIntoElementCount_(0),
     numRowsFetched_(0), rowsAffected_(-1LL), fetchVectorByRows_(false),
     boundByName_(false), boundByPos_(false), metadata_(NULL)
 {
@@ -166,11 +166,11 @@ mysql_statement_backend::execute(int number)
 
     }
 
-    std::unique_ptr<MYSQL_BIND[]> parameterBindArray;
+    cxx_details::auto_ptr<MYSQL_BIND> parameterBindArray;
 
     if (parameterBindingList_.size() > 0)
     {
-        parameterBindArray = std::make_unique<MYSQL_BIND[]>(parameterBindingList_.size());
+        parameterBindArray.reset(new MYSQL_BIND[parameterBindingList_.size()]);
 
         for (size_t bindingI = 0; bindingI < parameterBindingList_.size(); bindingI++)
         {
@@ -184,11 +184,11 @@ mysql_statement_backend::execute(int number)
         }
     }
 
-    std::unique_ptr<MYSQL_BIND[]> resultBindArray;
+    cxx_details::auto_ptr<MYSQL_BIND> resultBindArray;
 
     if (resultBindingList_.size() > 0)
     {
-        resultBindArray = std::make_unique<MYSQL_BIND[]>(resultBindingList_.size());
+        resultBindArray.reset(new MYSQL_BIND[resultBindingList_.size()]);
 
         for (size_t bindingI = 0; bindingI < resultBindingList_.size(); bindingI++)
         {
