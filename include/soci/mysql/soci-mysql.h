@@ -25,6 +25,10 @@
 #include <errmsg.h> // MySQL Error codes
 #include <vector>
 
+#ifndef my_bool
+    typedef char my_bool;
+#endif
+
 
 namespace soci
 {
