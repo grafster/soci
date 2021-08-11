@@ -128,6 +128,14 @@ public:
         }
     }
 
+    bool has_multiple_select_bug() const SOCI_OVERRIDE
+    {
+        // MySQL returns an error "Commands out of sync; you can't "
+        // "run this command now while preparing" if you try to run multiple selects
+
+        return true;
+    }
+
     std::string sql_length(std::string const& s) const SOCI_OVERRIDE
     {
         return "char_length(" + s + ")";
