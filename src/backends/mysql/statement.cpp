@@ -33,14 +33,14 @@ void mysql_statement_backend::alloc()
 
     if (hstmt_ == NULL)
     {
-        throw soci_error(std::string("Error allocating statement - ") + mysql_stmt_error(hstmt_));
+        throw mysql_soci_error(std::string("Error allocating statement - ") + mysql_stmt_error(hstmt_),
+            mysql_stmt_errno(hstmt_));
     }
 }
 
 void mysql_statement_backend::clean_up()
 {
     rowsAffected_ = -1LL;
-
     mysql_stmt_close(hstmt_);
 }
 
@@ -128,7 +128,7 @@ void mysql_statement_backend::prepare(std::string const & query,
     {
         std::ostringstream ss;
         ss << "preparing query \"" << query_ << "\"";
-        throw soci_error(ss.str() + " -" + mysql_stmt_error(hstmt_));
+        throw mysql_soci_error(ss.str() + " -" + mysql_stmt_error(hstmt_), mysql_stmt_errno(hstmt_));
     }
 
 
@@ -146,7 +146,8 @@ mysql_statement_backend::execute(int number)
     {
         if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_ARRAY_SIZE, &vectorUseElementCount_) != 0)
         {
-            throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
     }
     else if (hasVectorIntoElements_)
@@ -155,13 +156,15 @@ mysql_statement_backend::execute(int number)
         cursorType = CURSOR_TYPE_READ_ONLY;
         if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_CURSOR_TYPE, &cursorType) != 0)
         {
-            throw soci_error(std::string("Statement cursor attribute set failed - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Statement cursor attribute set failed - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
 
 
         if (mysql_stmt_attr_set(hstmt_, STMT_ATTR_PREFETCH_ROWS, &vectorIntoElementCount_) != 0)
         {
-            throw soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Statement array attribute set failed - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
 
     }
@@ -180,7 +183,8 @@ mysql_statement_backend::execute(int number)
 
         if (mysql_stmt_bind_param(hstmt_, parameterBindArray.get()) != 0)
         {
-            throw soci_error("Parameter binding error");
+            throw mysql_soci_error(std::string("Parameter binding error - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
     }
 
@@ -198,7 +202,8 @@ mysql_statement_backend::execute(int number)
 
         if (mysql_stmt_bind_result(hstmt_, resultBindArray.get()) != 0)
         {
-            throw soci_error(std::string("Parameter binding error - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Parameter binding error - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
     }
 
@@ -210,7 +215,8 @@ mysql_statement_backend::execute(int number)
 
     if (mysql_stmt_execute(hstmt_) != 0)
     {
-        throw soci_error(std::string("Statement execute failed - ") + mysql_stmt_error(hstmt_));
+        throw mysql_soci_error(std::string("Statement execute failed - ") + mysql_stmt_error(hstmt_),
+            mysql_stmt_errno(hstmt_));
     }
     else if (hasVectorUseElements_)
     {
@@ -253,11 +259,13 @@ mysql_statement_backend::do_fetch(int rowNumber)
     {
         if (rc == MYSQL_DATA_TRUNCATED)
         {
-            throw soci_error(std::string("Error fetching data (truncation) - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Error fetching data (truncation) - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
         else
         {
-            throw soci_error(std::string("Error fetching data - ") + mysql_stmt_error(hstmt_));
+            throw mysql_soci_error(std::string("Error fetching data - ") + mysql_stmt_error(hstmt_),
+                mysql_stmt_errno(hstmt_));
         }
     }
 
@@ -325,7 +333,8 @@ int mysql_statement_backend::prepare_for_describe()
     metadata_ = mysql_stmt_result_metadata(hstmt_);
     if (metadata_ == NULL)
     {
-        throw soci_error(std::string("Error loading statement data - ") + mysql_stmt_error(hstmt_));
+        throw mysql_soci_error(std::string("Error loading statement data - ") + mysql_stmt_error(hstmt_),
+            mysql_stmt_errno(hstmt_));
     }
 
     return static_cast<int>(mysql_stmt_field_count(hstmt_));
@@ -391,7 +400,7 @@ std::size_t mysql_statement_backend::column_size(int colNum)
         prepare_for_describe();
     }
 
-    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum));
+    MYSQL_FIELD* field = mysql_fetch_field_direct(metadata_, static_cast<unsigned int>(colNum-1));
 
     if (field == NULL)
     {
