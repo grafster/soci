@@ -104,10 +104,9 @@ void mysql_standard_use_type_backend::copy_from_string(
 {
     size = s.size();
     sqlType = MYSQL_TYPE_STRING;
-    buf_ = new char[size+1];
+    buf_ = new char[size];
     memcpy(buf_, s.c_str(), size);
-    buf_[size++] = '\0';
-    indHolder_ = STMT_INDICATOR_NTS;
+    indHolder_ = STMT_INDICATOR_NONE;
 }
 
 void mysql_standard_use_type_backend::bind_by_pos(
